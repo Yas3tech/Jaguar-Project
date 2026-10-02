@@ -1,0 +1,328 @@
+<title>Jaguar Ritanalyse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: meetrapport van één testrit — samenvatting bovenaan, daarna per vraag (recht? vlak? trillingen?) een paneel met grafiek + uitleg. */
+:root {
+  --bg: #f3f5f4;
+  --surface: #fcfdfc;
+  --ink: #17201d;
+  --ink-2: #4d5753;
+  --ink-3: #7b8581;
+  --rule: #d9dfdc;
+  --grid: #e6eae8;
+  --band: #eef1ef;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --good: #0ca30c;
+  --good-ink: #0a6e0a;
+  --warn: #fab219;
+  --warn-ink: #8a5a00;
+  --neutral-chip: #e4e9e7;
+  --f-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --f-body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --f-data: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121615; --surface: #1a1f1d; --ink: #eef2f0; --ink-2: #b9c2be; --ink-3: #87918d;
+    --rule: #2f3633; --grid: #262c2a; --band: #222826; --s1: #3987e5; --s2: #d95926;
+    --good-ink: #5fd35f; --warn-ink: #fab219; --neutral-chip: #2a312e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121615; --surface: #1a1f1d; --ink: #eef2f0; --ink-2: #b9c2be; --ink-3: #87918d;
+  --rule: #2f3633; --grid: #262c2a; --band: #222826; --s1: #3987e5; --s2: #d95926;
+  --good-ink: #5fd35f; --warn-ink: #fab219; --neutral-chip: #2a312e; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 56px; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font-family: var(--f-data); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font-family: var(--f-display); font-weight: 600; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--f-display); font-weight: 600; font-size: 24px; margin: 0; text-wrap: balance; }
+h3 { font-family: var(--f-body); font-weight: 600; font-size: 14px; margin: 0; color: var(--ink-2); }
+p { margin: 0; max-width: 68ch; color: var(--ink-2); }
+.setup { font-family: var(--f-data); font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.verdicts { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 10px; border-radius: 999px; background: var(--neutral-chip); font-size: 14px; font-weight: 500; }
+.chip svg { width: 14px; height: 14px; flex: none; }
+.chip.good { color: var(--good-ink); }
+.chip.warn { color: var(--warn-ink); }
+.chip.info { color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.tile { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; align-content: start; }
+.tile .k { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
+.tile .v { font-family: var(--f-display); font-weight: 600; font-size: 32px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .v small { font-family: var(--f-body); font-size: 15px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.tile .n { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+section { display: grid; gap: 14px; }
+.sec-head { display: grid; gap: 4px; border-top: 2px solid var(--ink); padding-top: 10px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 14px 10px; display: grid; gap: 8px; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
+.legend i.box { height: 10px; width: 14px; border-radius: 2px; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--f-data); font-size: 11px; fill: var(--ink-3); }
+.chart .lbl { fill: var(--ink-2); font-size: 11.5px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; font-family: var(--f-data); font-size: 12px; color: var(--ink); white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / .12); }
+.tip .row { display: flex; align-items: center; gap: 6px; }
+.tip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.note { font-size: 13.5px; color: var(--ink-2); }
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+td.num { font-family: var(--f-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow" id="ritid">Fase 1 · rechtdoor rijden</div>
+    <h1>Jaguar 4x4 — rechtlijnigheid en niveau</h1>
+    <div class="setup" id="setup"></div>
+  </header>
+
+  <div class="verdicts" id="verdicts"></div>
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <div class="sec-head">
+      <h2>Tracking: rijdt de robot recht?</h2>
+      <p>Pad gereconstrueerd uit de afgelegde afstand (encoders) en de koers uit de gyro (Z-as, bias gemeten in rust). Positief = naar links.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h3>Zijdelingse afwijking t.o.v. de startlijn</h3>
+        <div class="chart" id="c-lat"></div>
+      </div>
+      <div class="panel">
+        <h3>Koersverandering</h3>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Gyro (IMU)</span><span><i style="background:var(--s2)"></i>Encoders links/rechts</span></div>
+        <div class="chart" id="c-head"></div>
+      </div>
+    </div>
+    <p class="note" id="note-track"></p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Niveau: helling en dwarshelling</h2>
+      <p>Hoeken uit de zwaartekrachtrichting van de accelerometer, gemiddeld over 0,5 s. Pitch positief = neus omhoog, roll positief = linkerkant hoger. Tijdens optrekken en remmen (gearceerd) meet de pitch ook de versnelling en is ze geen helling.</p>
+    </div>
+    <div class="panel">
+      <div class="legend"><span><i style="background:var(--s1)"></i>Pitch (langshelling)</span><span><i style="background:var(--s2)"></i>Roll (dwarshelling)</span><span><i class="box" style="background:var(--band)"></i>Optrekken / remmen</span></div>
+      <div class="chart" id="c-level"></div>
+    </div>
+    <p class="note" id="note-level"></p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Trillingen en snelheid</h2>
+      <p>Verticale trilling = RMS van de Z-versnelling na aftrek van het lokale gemiddelde, per venster van 0,2 s. Dit is de basis voor de padkwaliteit-index.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h3>Verticale trilling langs het pad</h3>
+        <div class="chart" id="c-vib"></div>
+      </div>
+      <div class="panel">
+        <h3>Snelheid (encoders)</h3>
+        <div class="chart" id="c-speed"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Meetwaarden en aannames</h2>
+    </div>
+    <div class="tablewrap"><table id="tbl"></table></div>
+  </section>
+</div>
+
+<script type="application/json" id="rit-data">__RIT_DATA__</script>
+<script>
+let RIT;
+try { RIT = JSON.parse(document.getElementById("rit-data").textContent); }
+catch (e) {
+  document.querySelector(".wrap").innerHTML = '<header><div class="eyebrow">Sjabloon</div><h1>Geen ritdata</h1><p>Dit is het sjabloon. Draai <code>python analyse_rit.py</code> en open <code>ritten/rit_…_dashboard.html</code>.</p></header>';
+  throw e;
+}
+const S = RIT.summary, D = RIT.series;
+const nl = (v, d = 2) => (v == null ? "–" : Number(v).toLocaleString("nl-BE", { minimumFractionDigits: d, maximumFractionDigits: d }));
+const sgn = (v, d = 2) => (v > 0 ? "+" : v < 0 ? "−" : "") + nl(Math.abs(v), d);
+
+document.getElementById("ritid").textContent = `Fase 1 · rechtdoor rijden · ${S.rit.replace("rit_", "").replace(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/, "$3/$2/$1 $4:$5")}`;
+document.getElementById("setup").innerHTML = [
+  `vermogen ${Math.max(...D.pwr)}/1000 open-loop`, `${nl(S.snelheid_ms)} m/s`, `IMU ${S.imu_hz} Hz · ${S.imu_samples} samples`,
+  `batterij ${nl(S.batterij_start_v, 1)} V → ${nl(S.batterij_rit_min_v, 1)} V`, `motor max ${S.temp_max_c} °C`,
+].map((s) => `<span>${s}</span>`).join("");
+
+// --- Oordelen ---------------------------------------------------------------
+const ICON = {
+  good: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="var(--good)"/><path d="M4.5 8.2l2.3 2.3 4.7-4.8" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 16 16"><path d="M8 1l7.5 13.5H.5z" fill="var(--warn)"/><path d="M8 6v4" stroke="#17201d" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="12.2" r=".9" fill="#17201d"/></svg>',
+  info: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r=".9" fill="currentColor"/></svg>',
+};
+const straight = Math.abs(S.zijdelings_max_cm) < 5 && Math.abs(S.koersdrift_gyro_deg) < 2;
+const flat = Math.abs(S.pitch_rit_gem_deg) < 1 && Math.abs(S.roll_rit_gem_deg) < 1;
+const verdicts = [
+  [straight ? "good" : "warn", "Rechtlijnigheid", straight ? `recht (max ${sgn(S.zijdelings_max_cm, 1)} cm)` : `afwijking ${sgn(S.zijdelings_max_cm, 1)} cm`],
+  [flat ? "good" : "warn", "Niveau", flat ? "vlakke ondergrond (< 1°)" : "helling gemeten"],
+  ["info", "Trilling Z", `${nl(S.trilling_z_rms_g, 2)} g RMS · eerste referentierit`],
+];
+document.getElementById("verdicts").innerHTML = verdicts.map(([c, k, v]) => `<span class="chip ${c}">${ICON[c]}<b>${k}</b> ${v}</span>`).join("");
+
+// --- Kerncijfers -------------------------------------------------------------
+const tiles = [
+  ["Afstand", nl(S.afstand_m), "m", `links ${nl(S.afstand_links_m)} · rechts ${nl(S.afstand_rechts_m)} m`],
+  ["Zijdelings eind", sgn(S.zijdelings_eind_cm, 1), "cm", `max ${sgn(S.zijdelings_max_cm, 1)} cm`],
+  ["Koersdrift", sgn(S.koersdrift_gyro_deg), "°", `encoders: ${sgn(S.koersdrift_encoder_deg)}°`],
+  ["Langshelling", sgn(S.pitch_rit_gem_deg), "°", `rust ${sgn(S.pitch_rust_deg)}° · ${sgn(S.pitch_rit_min_deg, 1)} … ${sgn(S.pitch_rit_max_deg, 1)}°`],
+  ["Dwarshelling", sgn(S.roll_rit_gem_deg), "°", `rust ${sgn(S.roll_rust_deg)}° · ${sgn(S.roll_rit_min_deg, 1)} … ${sgn(S.roll_rit_max_deg, 1)}°`],
+  ["Trilling Z", nl(S.trilling_z_rms_g, 2), "g RMS", `in rust ${nl(S.trilling_z_rust_g, 3)} g · piek ${nl(S.piek_z_g, 2)} g`],
+];
+document.getElementById("tiles").innerHTML = tiles.map(([k, v, u, n]) => `<div class="tile"><span class="k">${k}</span><span class="v">${v}<small>${u}</small></span><span class="n">${n}</span></div>`).join("");
+
+document.getElementById("note-track").textContent =
+  `De gyro meet ${sgn(S.koersdrift_gyro_deg)}° koersverandering over ${nl(S.afstand_m)} m; de encoders suggereren ${sgn(S.koersdrift_encoder_deg)}°. ` +
+  `Het verschil komt door wielslip: bij een skid-steer 4x4 schuiven de wielen altijd een beetje, dus de encoders overschatten draaien. Voor de koers is de gyro de betrouwbare bron.`;
+document.getElementById("note-level").textContent =
+  `In rust: pitch ${sgn(S.pitch_rust_deg)}°, roll ${sgn(S.roll_rust_deg)}°. Tijdens de constante rit gemiddeld pitch ${sgn(S.pitch_rit_gem_deg)}°, roll ${sgn(S.roll_rit_gem_deg)}°. ` +
+  `De schommelingen van ±1 à 2° komen grotendeels van de trillingen (${nl(S.trilling_y_rms_g, 2)} g RMS dwars) en niet van de vloer; een echte helling toont zich als een blijvende verschuiving van het gemiddelde.`;
+
+// --- Grafieken ---------------------------------------------------------------
+// Rijdeel: van start tot de robot stilstaat (afstand stijgt niet meer)
+const sMax = Math.max(...D.s);
+const iEnd = D.s.findIndex((v) => v >= sMax - 1e-6);
+const idx = D.t.map((t, i) => i).filter((i) => D.t[i] >= 0 && i <= iEnd);
+const pick = (arr) => idx.map((i) => arr[i]);
+const sAtT = (t) => { let k = D.t.findIndex((x) => x >= t); return k < 0 ? sMax : D.s[k]; };
+const steadyS = [sAtT(S.steady_venster_s[0]), sAtT(S.steady_venster_s[1])];
+
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo || 1, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= n) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function lineChart(id, o) {
+  const el = document.getElementById(id);
+  function draw() {
+    const W = Math.max(300, el.clientWidth), H = o.height || 230, m = { l: 46, r: o.endLabels ? 74 : 14, t: 24, b: 36 };
+    const allY = o.series.flatMap((s) => s.y).concat(o.yInclude || []);
+    let y0 = Math.min(...allY), y1 = Math.max(...allY);
+    const pad = (y1 - y0 || 1) * 0.08; y0 -= pad; y1 += pad;
+    const yt = niceTicks(y0, y1, 5); y0 = Math.min(y0, yt[0]); y1 = Math.max(y1, yt[yt.length - 1]);
+    const x0 = o.xMin ?? Math.min(...o.x), x1 = o.xMax ?? Math.max(...o.x);
+    const X = (v) => m.l + ((v - x0) / (x1 - x0)) * (W - m.l - m.r);
+    const Y = (v) => m.t + (1 - (v - y0) / (y1 - y0)) * (H - m.t - m.b);
+    let g = "";
+    (o.bands || []).forEach(([a, b]) => { if (b > a) g += `<rect x="${X(a)}" y="${m.t}" width="${X(b) - X(a)}" height="${H - m.t - m.b}" fill="var(--band)"/>`; });
+    yt.forEach((v) => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${nl(v, o.yDec ?? 1)}</text>`; });
+    if (y0 < 0 && y1 > 0) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--ink-3)" stroke-width="1"/>`;
+    niceTicks(x0, x1, Math.max(3, Math.floor(W / 90))).forEach((v) => { g += `<text x="${X(v)}" y="${H - m.b + 16}" text-anchor="middle">${nl(v, o.xDec ?? 1)}</text>`; });
+    g += `<text class="lbl" x="${W - m.r}" y="${H - 4}" text-anchor="end">${o.xLabel}</text>`;
+    g += `<text class="lbl" x="${m.l - 6}" y="12" text-anchor="end">${o.yUnit}</text>`;
+    o.series.forEach((s) => {
+      const xs = s.x || o.x;
+      const brk = s.x ? [] : o.breaks || [];
+      const d = xs.map((xv, i) => `${i && !brk[i] ? "L" : "M"}${X(xv).toFixed(1)},${Y(s.y[i]).toFixed(1)}`).join("");
+      g += `<path d="${d}" fill="none" stroke="var(${s.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      const li = xs.length - 1;
+      g += `<circle cx="${X(xs[li])}" cy="${Y(s.y[li])}" r="4" fill="var(${s.color})" stroke="var(--surface)" stroke-width="2"/>`;
+      if (o.endLabels) g += `<text class="lbl" x="${X(xs[li]) + 8}" y="${Y(s.y[li]) + 4}">${sgn(s.y[li], o.tipDec ?? o.yDec ?? 1)}${o.yUnitShort || ""}</text>`;
+    });
+    g += `<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${H - m.b}" stroke="var(--ink-3)" stroke-dasharray="3 3" visibility="hidden"/>`;
+    g += `<rect class="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.aria}">${g}</svg><div class="tip" hidden></div>`;
+    const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), xh = el.querySelector(".xh");
+    const move = (ev) => {
+      const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+      const xv = x0 + ((px - m.l) / (W - m.l - m.r)) * (x1 - x0);
+      let rows = "";
+      o.series.forEach((s) => {
+        const xs = s.x || o.x; let k = 0, best = Infinity;
+        xs.forEach((v, i) => { const dd = Math.abs(v - xv); if (dd < best) { best = dd; k = i; } });
+        rows += `<div class="row"><i style="background:var(${s.color})"></i>${s.name}: ${sgn(s.y[k], o.tipDec ?? 2)} ${o.yUnitShort || ""}</div>`;
+      });
+      xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.setAttribute("visibility", "visible");
+      tip.innerHTML = `<div>${o.xLabel.split(" (")[0]} ${nl(xv, 2)}</div>${rows}`; tip.hidden = false;
+      const tw = tip.offsetWidth, left = (px / W) * r.width;
+      tip.style.left = `${left + 12 + tw > r.width ? left - tw - 12 : left + 12}px`; tip.style.top = "8px";
+    };
+    svg.addEventListener("pointermove", move);
+    svg.addEventListener("pointerleave", () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); });
+  }
+  draw();
+  new ResizeObserver(() => draw()).observe(el);
+}
+
+const sDrive = pick(D.s);
+// Gat in de IMU-data (> 0,1 s zonder samples): lijn onderbreken i.p.v. doortrekken
+const breaks = idx.map((i, k) => k > 0 && D.t[i] - D.t[idx[k - 1]] > 0.1);
+lineChart("c-lat", {
+  x: sDrive, breaks, series: [{ name: "Zijdelings", y: pick(D.y), color: "--s1" }],
+  xLabel: "afstand (m)", yUnit: "cm", yUnitShort: "cm", yInclude: [-5, 5], yDec: 0, tipDec: 1, endLabels: true,
+  aria: "Zijdelingse afwijking in centimeter tegen afstand",
+});
+lineChart("c-head", {
+  x: sDrive, breaks,
+  series: [
+    { name: "Gyro", y: pick(D.heading), color: "--s1" },
+    { name: "Encoders", x: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[1]), y: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[2]), color: "--s2" },
+  ],
+  xLabel: "afstand (m)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 0, tipDec: 1, endLabels: true,
+  aria: "Koersverandering in graden: gyro en encoders",
+});
+lineChart("c-level", {
+  x: sDrive, height: 260, breaks,
+  series: [{ name: "Pitch", y: pick(D.pitch), color: "--s1" }, { name: "Roll", y: pick(D.roll), color: "--s2" }],
+  bands: [[0, steadyS[0]], [steadyS[1], sMax]],
+  xLabel: "afstand (m)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 1, tipDec: 1, endLabels: true,
+  aria: "Pitch en roll in graden tegen afstand",
+});
+const vib = D.vib.filter((r) => r[0] >= 0 && r[1] <= sMax && r[0] <= D.t[iEnd]);
+lineChart("c-vib", {
+  x: vib.map((r) => r[1]), series: [{ name: "Z RMS", y: vib.map((r) => r[2]), color: "--s1" }],
+  bands: [[0, steadyS[0]], [steadyS[1], sMax]],
+  xLabel: "afstand (m)", yUnit: "g", yUnitShort: "g", yInclude: [0], yDec: 1, tipDec: 3,
+  aria: "Verticale trilling RMS in g tegen afstand",
+});
+const sp = D.speed.filter((r) => r[0] >= -0.5);
+lineChart("c-speed", {
+  x: sp.map((r) => r[0]), series: [{ name: "Snelheid", y: sp.map((r) => r[1]), color: "--s1" }],
+  xLabel: "tijd sinds start (s)", yUnit: "m/s", yUnitShort: "m/s", yInclude: [0], yDec: 1,
+  aria: "Snelheid in meter per seconde tegen tijd",
+});
+
+// --- Tabel -------------------------------------------------------------------
+const rows = [
+  ["Afgelegde afstand", `${nl(S.afstand_m)} m`, "gemiddelde van 4 wielen; 300 pulsen/omw., wielstraal 0,135 m (config Dr Robot)"],
+  ["Constante snelheid", `${nl(S.snelheid_ms)} m/s`, `venster ${nl(S.steady_venster_s[0], 1)}–${nl(S.steady_venster_s[1], 1)} s na start`],
+  ["Optrekken / remmen", `${sgn(S.optrekken_g)} / ${sgn(S.remmen_g)} g`, "X-as accelerometer, bevestigt X = vooruit"],
+  ["Koersdrift gyro", `${sgn(S.koersdrift_gyro_deg)}°`, "ITG3205, 14,375 LSB per °/s (datasheet); bias in rust afgetrokken"],
+  ["Koersdrift encoders", `${sgn(S.koersdrift_encoder_deg)}°`, "(rechts − links) / spoorbreedte 0,52 m; overschat door slip"],
+  ["Zijdelings eind / max", `${sgn(S.zijdelings_eind_cm, 1)} / ${sgn(S.zijdelings_max_cm, 1)} cm`, "dead reckoning: encoder-afstand × gyrokoers"],
+  ["Pitch rust / rit", `${sgn(S.pitch_rust_deg)}° / ${sgn(S.pitch_rit_gem_deg)}°`, "atan2(aX, aZ), positief = neus omhoog"],
+  ["Roll rust / rit", `${sgn(S.roll_rust_deg)}° / ${sgn(S.roll_rit_gem_deg)}°`, "atan2(aY, aZ), positief = linkerkant hoger"],
+  ["Trilling X / Y / Z", `${nl(S.trilling_x_rms_g, 3)} / ${nl(S.trilling_y_rms_g, 3)} / ${nl(S.trilling_z_rms_g, 3)} g`, "RMS tijdens constante snelheid; ADXL345, 256 LSB/g"],
+  ["Trilling Z in rust", `${nl(S.trilling_z_rust_g, 3)} g`, "ruisvloer van de sensor"],
+  ["Gyro-bias (X, Y, Z)", S.gyro_bias_counts.map((v) => nl(v, 2)).join(" · ") + " counts", "gemiddelde over de rustfase vóór de rit"],
+  ["Motorstroom max", `${nl(S.stroom_max_a, 1)} A`, "RoboteQ ‘A’-register ÷ 10"],
+  ["Batterij", `${nl(S.batterij_start_v, 1)} → ${nl(S.batterij_rit_min_v, 1)} V`, "laden onder 22,2 V (handleiding)"],
+];
+document.getElementById("tbl").innerHTML = `<thead><tr><th>Grootheid</th><th>Waarde</th><th>Hoe bepaald</th></tr></thead><tbody>` +
+  rows.map(([a, b, c]) => `<tr><td>${a}</td><td class="num">${b}</td><td>${c}</td></tr>`).join("") + "</tbody>";
+</script>

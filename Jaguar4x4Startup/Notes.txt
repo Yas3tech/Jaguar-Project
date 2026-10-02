@@ -1,0 +1,11 @@
+1. Install Axis Camera SDK.
+2. Install Microsoft DirectX SDK.
+3. Install Google Earth.
+4. Install Jaguar Control program.
+5. Install Jaguar Navigation program.
+
+System Informaation:
+Main control IP: 192.168.0.60
+Camera: 192.168.0.65:8081 ID: root PWD: drrobot
+WiFi Access Point: 192.168.0.245 SSID:DriJaguar key: drrobotdrrobot
+
