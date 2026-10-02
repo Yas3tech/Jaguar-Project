@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jaguar Ritanalyse</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,6 +48,11 @@ h2 { font-family: var(--f-display); font-weight: 600; font-size: 24px; margin: 0
 h3 { font-family: var(--f-body); font-weight: 600; font-size: 14px; margin: 0; color: var(--ink-2); }
 p { margin: 0; max-width: 68ch; color: var(--ink-2); }
 .setup { font-family: var(--f-data); font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.rit-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-block: 10px; }
+.rit-picker label { font-weight: 600; }
+.rit-picker select { max-width: 100%; min-width: min(100%, 300px); padding: 9px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.rit-picker select:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+#rit-count { font-size: 13px; color: var(--ink-3); }
 .verdicts { display: flex; flex-wrap: wrap; gap: 10px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 10px; border-radius: 999px; background: var(--neutral-chip); font-size: 14px; font-weight: 500; }
 .chip svg { width: 14px; height: 14px; flex: none; }
@@ -87,11 +94,24 @@ tr:last-child td { border-bottom: 0; }
   <header>
     <div class="eyebrow" id="ritid">Fase 1 · rechtdoor rijden</div>
     <h1>Jaguar 4x4 — rechtlijnigheid en niveau</h1>
+    <div class="rit-picker"><label for="rit-select">Selecteer een rit</label><select id="rit-select"></select><span id="rit-count"></span></div>
     <div class="setup" id="setup"></div>
   </header>
 
   <div class="verdicts" id="verdicts"></div>
   <div class="tiles" id="tiles"></div>
+
+
+  <section>
+    <div class="sec-head"><h2>Ritverkenner</h2><p>Sleep de tijdschuif. Baan en robotstand zijn schattingen. Alle grafieken tonen de volledige rit, inclusief terugrijden en uitbollen.</p></div>
+    <div class="panel"><label for="replay">Tijdstip in de rit</label><input id="replay" type="range" min="0" value="0" step="1"><output id="replay-info" aria-live="polite"></output></div>
+    <div class="grid2">
+      <div class="panel"><h3>Geschatte baan · bovenaanzicht</h3><div id="path-view" class="chart"></div><p class="note">Gelijke schaal op beide assen. Stippellijn = ideale startlijn. Links is boven; rechts is onder. Marker volgt de tijdschuif.</p></div>
+      <div class="panel"><h3>Robotstand · pitch en roll</h3><div id="pose-view" class="chart"></div><p class="note">Pitch: neus omhoog/omlaag. Roll: linker-/rechterkant omhoog. Hoeken komen uit de accelerometer en reageren ook op versnelling.</p></div>
+    </div>
+    <div class="panel"><h3>Motoropdracht en gemeten snelheid</h3><div class="grid2"><div id="c-command" class="chart"></div><div id="c-response" class="chart"></div></div><p class="note">Motoropdracht is geen snelheid. Negatieve opdracht en snelheid betekenen achteruitrijden.</p></div>
+    <div class="tablewrap"><table><thead><tr><th>Stand bij stilstand</th><th>Voor de rit</th><th>Na de rit</th></tr></thead><tbody id="rest-angles"></tbody></table></div>
+  </section>
 
   <section>
     <div class="sec-head">
@@ -115,10 +135,10 @@ tr:last-child td { border-bottom: 0; }
   <section>
     <div class="sec-head">
       <h2>Niveau: helling en dwarshelling</h2>
-      <p>Hoeken uit de zwaartekrachtrichting van de accelerometer, gemiddeld over 0,5 s. Pitch positief = neus omhoog, roll positief = linkerkant hoger. Tijdens optrekken en remmen (gearceerd) meet de pitch ook de versnelling en is ze geen helling.</p>
+      <p>Hoeken uit de zwaartekrachtrichting van de accelerometer, gemiddeld over 0,5 s. Pitch positief = neus omhoog, roll positief = linkerkant hoger. Tijdens optrekken, remmen en stilstand (gearceerd) meet de pitch ook de versnelling en is ze geen helling.</p>
     </div>
     <div class="panel">
-      <div class="legend"><span><i style="background:var(--s1)"></i>Pitch (langshelling)</span><span><i style="background:var(--s2)"></i>Roll (dwarshelling)</span><span><i class="box" style="background:var(--band)"></i>Optrekken / remmen</span></div>
+      <div class="legend"><span><i style="background:var(--s1)"></i>Pitch (langshelling)</span><span><i style="background:var(--s2)"></i>Roll (dwarshelling)</span><span><i class="box" style="background:var(--band)"></i>Lage / nul motoropdracht</span></div>
       <div class="chart" id="c-level"></div>
     </div>
     <p class="note" id="note-level"></p>
@@ -127,7 +147,7 @@ tr:last-child td { border-bottom: 0; }
   <section>
     <div class="sec-head">
       <h2>Trillingen en snelheid</h2>
-      <p>Verticale trilling = RMS van de Z-versnelling na aftrek van het lokale gemiddelde, per venster van 0,2 s. Dit is de basis voor de padkwaliteit-index.</p>
+      <p>Verticale trilling = RMS van de Z-versnelling na aftrek van het lokale gemiddelde, per venster van 0,2 s. Hogere waarden betekenen meer verticale beweging; dit is nog geen gekalibreerde padkwaliteit-index.</p>
     </div>
     <div class="grid2">
       <div class="panel">
@@ -151,19 +171,32 @@ tr:last-child td { border-bottom: 0; }
 
 <script type="application/json" id="rit-data">__RIT_DATA__</script>
 <script>
-let RIT;
-try { RIT = JSON.parse(document.getElementById("rit-data").textContent); }
+let DATA;
+try { DATA = JSON.parse(document.getElementById("rit-data").textContent); }
 catch (e) {
-  document.querySelector(".wrap").innerHTML = '<header><div class="eyebrow">Sjabloon</div><h1>Geen ritdata</h1><p>Dit is het sjabloon. Draai <code>python analyse_rit.py</code> en open <code>ritten/rit_…_dashboard.html</code>.</p></header>';
+  document.querySelector(".wrap").innerHTML = '<header><div class="eyebrow">Sjabloon</div><h1>Geen ritdata</h1><p>Dit is het sjabloon. Draai <code>python analyse_rit.py</code> en open <code>dashboard.html</code>.</p></header>';
   throw e;
 }
+const rides = DATA.rides || [DATA];
+const selector = document.getElementById("rit-select");
+const rideDate = (rit) => rit.replace("rit_", "").replace(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/, "$3/$2/$1 $4:$5:$6");
+rides.forEach((ride) => {
+  const option = document.createElement("option");
+  option.value = ride.summary.rit;
+  option.textContent = `${rideDate(ride.summary.rit)} · ${ride.summary.rittype || "rechtdoor"}`;
+  selector.append(option);
+});
+document.getElementById("rit-count").textContent = `${rides.length} ${rides.length === 1 ? "rit" : "ritten"}`;
+const observers = [];
+function renderRide(RIT) {
+observers.splice(0).forEach((observer) => observer.disconnect());
 const S = RIT.summary, D = RIT.series;
 const nl = (v, d = 2) => (v == null ? "–" : Number(v).toLocaleString("nl-BE", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const sgn = (v, d = 2) => (v > 0 ? "+" : v < 0 ? "−" : "") + nl(Math.abs(v), d);
 
-document.getElementById("ritid").textContent = `Fase 1 · rechtdoor rijden · ${S.rit.replace("rit_", "").replace(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/, "$3/$2/$1 $4:$5")}`;
+document.getElementById("ritid").textContent = `Fase 1 · ${S.rittype || "rechtdoor"} · ${S.rit.replace("rit_", "").replace(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/, "$3/$2/$1 $4:$5")}`;
 document.getElementById("setup").innerHTML = [
-  `vermogen ${Math.max(...D.pwr)}/1000 open-loop`, `${nl(S.snelheid_ms)} m/s`, `IMU ${S.imu_hz} Hz · ${S.imu_samples} samples`,
+  `vermogen ${Math.max(...D.pwr.map(Math.abs))}/1000 open-loop`, `${nl(S.snelheid_ms)} m/s`, `IMU ${S.imu_hz} Hz · ${S.imu_samples} samples`,
   `batterij ${nl(S.batterij_start_v, 1)} V → ${nl(S.batterij_rit_min_v, 1)} V`, `motor max ${S.temp_max_c} °C`,
 ].map((s) => `<span>${s}</span>`).join("");
 
@@ -177,37 +210,47 @@ const straight = Math.abs(S.zijdelings_max_cm) < 5 && Math.abs(S.koersdrift_gyro
 const flat = Math.abs(S.pitch_rit_gem_deg) < 1 && Math.abs(S.roll_rit_gem_deg) < 1;
 const verdicts = [
   [straight ? "good" : "warn", "Rechtlijnigheid", straight ? `recht (max ${sgn(S.zijdelings_max_cm, 1)} cm)` : `afwijking ${sgn(S.zijdelings_max_cm, 1)} cm`],
-  [flat ? "good" : "warn", "Niveau", flat ? "vlakke ondergrond (< 1°)" : "helling gemeten"],
+  [flat ? "good" : "warn", "Niveau", flat ? "kleine geschatte hoeken (< 1°)" : "grotere geschatte hoeken"],
   ["info", "Trilling Z", `${nl(S.trilling_z_rms_g, 2)} g RMS · eerste referentierit`],
 ];
 document.getElementById("verdicts").innerHTML = verdicts.map(([c, k, v]) => `<span class="chip ${c}">${ICON[c]}<b>${k}</b> ${v}</span>`).join("");
 
 // --- Kerncijfers -------------------------------------------------------------
 const tiles = [
-  ["Afstand", nl(S.afstand_m), "m", `links ${nl(S.afstand_links_m)} · rechts ${nl(S.afstand_rechts_m)} m`],
+  ["Verplaatsing eind", sgn(S.verplaatsing_m), "m", "getekende encoderafstand; terugrijden trekt af"],
+  ["Hoogste gemeten snelheid", nl(S.snelheid_max_ms), "m/s", "ruwe encoderpiek; pakketvertraging kan pieken veroorzaken"],
+  ["Totale afstand", nl(S.afstand_m), "m", `links ${nl(S.afstand_links_m)} · rechts ${nl(S.afstand_rechts_m)} m`],
   ["Zijdelings eind", sgn(S.zijdelings_eind_cm, 1), "cm", `max ${sgn(S.zijdelings_max_cm, 1)} cm`],
   ["Koersdrift", sgn(S.koersdrift_gyro_deg), "°", `encoders: ${sgn(S.koersdrift_encoder_deg)}°`],
   ["Langshelling", sgn(S.pitch_rit_gem_deg), "°", `rust ${sgn(S.pitch_rust_deg)}° · ${sgn(S.pitch_rit_min_deg, 1)} … ${sgn(S.pitch_rit_max_deg, 1)}°`],
   ["Dwarshelling", sgn(S.roll_rit_gem_deg), "°", `rust ${sgn(S.roll_rust_deg)}° · ${sgn(S.roll_rit_min_deg, 1)} … ${sgn(S.roll_rit_max_deg, 1)}°`],
+  ["Pitch na rust", S.pitch_eind_deg == null ? "–" : sgn(S.pitch_eind_deg), "°", "laatste 0,5 s van uitbollen"],
+  ["Roll na rust", S.roll_eind_deg == null ? "–" : sgn(S.roll_eind_deg), "°", "laatste 0,5 s van uitbollen"],
   ["Trilling Z", nl(S.trilling_z_rms_g, 2), "g RMS", `in rust ${nl(S.trilling_z_rust_g, 3)} g · piek ${nl(S.piek_z_g, 2)} g`],
 ];
 document.getElementById("tiles").innerHTML = tiles.map(([k, v, u, n]) => `<div class="tile"><span class="k">${k}</span><span class="v">${v}<small>${u}</small></span><span class="n">${n}</span></div>`).join("");
 
 document.getElementById("note-track").textContent =
-  `De gyro meet ${sgn(S.koersdrift_gyro_deg)}° koersverandering over ${nl(S.afstand_m)} m; de encoders suggereren ${sgn(S.koersdrift_encoder_deg)}°. ` +
-  `Het verschil komt door wielslip: bij een skid-steer 4x4 schuiven de wielen altijd een beetje, dus de encoders overschatten draaien. Voor de koers is de gyro de betrouwbare bron.`;
+  "Geschatte baan: encoderafstand gecombineerd met gyrokoers. Verschillen tussen gyro en encoders kunnen ontstaan door slip, kalibratie en meetfouten. Dit is geen GPS-meting.";
 document.getElementById("note-level").textContent =
-  `In rust: pitch ${sgn(S.pitch_rust_deg)}°, roll ${sgn(S.roll_rust_deg)}°. Tijdens de constante rit gemiddeld pitch ${sgn(S.pitch_rit_gem_deg)}°, roll ${sgn(S.roll_rit_gem_deg)}°. ` +
-  `De schommelingen van ±1 à 2° komen grotendeels van de trillingen (${nl(S.trilling_y_rms_g, 2)} g RMS dwars) en niet van de vloer; een echte helling toont zich als een blijvende verschuiving van het gemiddelde.`;
+  `In rust: pitch ${sgn(S.pitch_rust_deg)}°, roll ${sgn(S.roll_rust_deg)}°. Tijdens de geselecteerde rijmomenten: pitch ${sgn(S.pitch_rit_gem_deg)}°, roll ${sgn(S.roll_rit_gem_deg)}°. Acceleratie en trillingen beïnvloeden deze schatting; de grafiek bewijst geen vloerhelling.`;
 
 // --- Grafieken ---------------------------------------------------------------
 // Rijdeel: van start tot de robot stilstaat (afstand stijgt niet meer)
-const sMax = Math.max(...D.s);
-const iEnd = D.s.findIndex((v) => v >= sMax - 1e-6);
+const sMax = Math.max(...D.t);
+const iEnd = D.t.length - 1;
 const idx = D.t.map((t, i) => i).filter((i) => D.t[i] >= 0 && i <= iEnd);
 const pick = (arr) => idx.map((i) => arr[i]);
-const sAtT = (t) => { let k = D.t.findIndex((x) => x >= t); return k < 0 ? sMax : D.s[k]; };
-const steadyS = [sAtT(S.steady_venster_s[0]), sAtT(S.steady_venster_s[1])];
+const sAtT = (t) => { let k = D.t.findIndex((x) => x >= t); return k < 0 ? sMax : D.t[k]; };
+const steadyS = S.steady_venster_s;
+const phaseBands = [];
+for (let i=0; i<D.t.length-1; i++) {
+  if (D.t[i]>=0 && (Math.abs(D.pwr[i]) < .95*Math.max(...D.pwr.map(Math.abs)))) {
+    const last=phaseBands[phaseBands.length-1];
+    if(last && Math.abs(last[1]-D.t[i])<.001) last[1]=D.t[i+1];
+    else phaseBands.push([D.t[i],D.t[i+1]]);
+  }
+}
 
 function niceTicks(lo, hi, n = 5) {
   const span = hi - lo || 1, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
@@ -225,7 +268,7 @@ function lineChart(id, o) {
     let y0 = Math.min(...allY), y1 = Math.max(...allY);
     const pad = (y1 - y0 || 1) * 0.08; y0 -= pad; y1 += pad;
     const yt = niceTicks(y0, y1, 5); y0 = Math.min(y0, yt[0]); y1 = Math.max(y1, yt[yt.length - 1]);
-    const x0 = o.xMin ?? Math.min(...o.x), x1 = o.xMax ?? Math.max(...o.x);
+    const x0 = o.xMin ?? Math.min(...o.x), x1 = o.xMax ?? Math.max(x0 + 0.001, ...o.x);
     const X = (v) => m.l + ((v - x0) / (x1 - x0)) * (W - m.l - m.r);
     const Y = (v) => m.t + (1 - (v - y0) / (y1 - y0)) * (H - m.t - m.b);
     let g = "";
@@ -266,38 +309,40 @@ function lineChart(id, o) {
     svg.addEventListener("pointerleave", () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); });
   }
   draw();
-  new ResizeObserver(() => draw()).observe(el);
+  const observer = new ResizeObserver(() => draw());
+  observer.observe(el);
+  observers.push(observer);
 }
 
-const sDrive = pick(D.s);
+const sDrive = pick(D.t);
 // Gat in de IMU-data (> 0,1 s zonder samples): lijn onderbreken i.p.v. doortrekken
 const breaks = idx.map((i, k) => k > 0 && D.t[i] - D.t[idx[k - 1]] > 0.1);
 lineChart("c-lat", {
   x: sDrive, breaks, series: [{ name: "Zijdelings", y: pick(D.y), color: "--s1" }],
-  xLabel: "afstand (m)", yUnit: "cm", yUnitShort: "cm", yInclude: [-5, 5], yDec: 0, tipDec: 1, endLabels: true,
+  xLabel: "tijd sinds start (s)", yUnit: "cm", yUnitShort: "cm", yInclude: [-5, 5], yDec: 0, tipDec: 1, endLabels: true,
   aria: "Zijdelingse afwijking in centimeter tegen afstand",
 });
 lineChart("c-head", {
   x: sDrive, breaks,
   series: [
     { name: "Gyro", y: pick(D.heading), color: "--s1" },
-    { name: "Encoders", x: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[1]), y: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[2]), color: "--s2" },
+    { name: "Encoders", x: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[0]), y: D.enc_heading.filter((r) => r[0] >= 0).map((r) => r[2]), color: "--s2" },
   ],
-  xLabel: "afstand (m)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 0, tipDec: 1, endLabels: true,
+  xLabel: "tijd sinds start (s)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 0, tipDec: 1, endLabels: true,
   aria: "Koersverandering in graden: gyro en encoders",
 });
 lineChart("c-level", {
   x: sDrive, height: 260, breaks,
   series: [{ name: "Pitch", y: pick(D.pitch), color: "--s1" }, { name: "Roll", y: pick(D.roll), color: "--s2" }],
-  bands: [[0, steadyS[0]], [steadyS[1], sMax]],
-  xLabel: "afstand (m)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 1, tipDec: 1, endLabels: true,
+  bands: phaseBands,
+  xLabel: "tijd sinds start (s)", yUnit: "°", yUnitShort: "°", yInclude: [-1, 1], yDec: 1, tipDec: 1, endLabels: true,
   aria: "Pitch en roll in graden tegen afstand",
 });
-const vib = D.vib.filter((r) => r[0] >= 0 && r[1] <= sMax && r[0] <= D.t[iEnd]);
+const vib = D.vib.filter((r) => r[0] >= 0 && r[0] <= D.t[iEnd]);
 lineChart("c-vib", {
-  x: vib.map((r) => r[1]), series: [{ name: "Z RMS", y: vib.map((r) => r[2]), color: "--s1" }],
-  bands: [[0, steadyS[0]], [steadyS[1], sMax]],
-  xLabel: "afstand (m)", yUnit: "g", yUnitShort: "g", yInclude: [0], yDec: 1, tipDec: 3,
+  x: vib.map((r) => r[0]), series: [{ name: "Z RMS", y: vib.map((r) => r[2]), color: "--s1" }],
+  bands: phaseBands,
+  xLabel: "tijd sinds start (s)", yUnit: "g", yUnitShort: "g", yInclude: [0], yDec: 1, tipDec: 3,
   aria: "Verticale trilling RMS in g tegen afstand",
 });
 const sp = D.speed.filter((r) => r[0] >= -0.5);
@@ -309,8 +354,8 @@ lineChart("c-speed", {
 
 // --- Tabel -------------------------------------------------------------------
 const rows = [
-  ["Afgelegde afstand", `${nl(S.afstand_m)} m`, "gemiddelde van 4 wielen; 300 pulsen/omw., wielstraal 0,135 m (config Dr Robot)"],
-  ["Constante snelheid", `${nl(S.snelheid_ms)} m/s`, `venster ${nl(S.steady_venster_s[0], 1)}–${nl(S.steady_venster_s[1], 1)} s na start`],
+  ["Afgelegde afstand", `${nl(S.afstand_m)} m`, "som van absolute afstandsstappen; heen + terug; wielstraal 0,135 m"],
+  ["Snelheid in geselecteerde rijmomenten", `${nl(S.snelheid_ms)} m/s`, `venster ${nl(S.steady_venster_s[0], 1)}–${nl(S.steady_venster_s[1], 1)} s na start`],
   ["Optrekken / remmen", `${sgn(S.optrekken_g)} / ${sgn(S.remmen_g)} g`, "X-as accelerometer, bevestigt X = vooruit"],
   ["Koersdrift gyro", `${sgn(S.koersdrift_gyro_deg)}°`, "ITG3205, 14,375 LSB per °/s (datasheet); bias in rust afgetrokken"],
   ["Koersdrift encoders", `${sgn(S.koersdrift_encoder_deg)}°`, "(rechts − links) / spoorbreedte 0,52 m; overschat door slip"],
@@ -325,4 +370,35 @@ const rows = [
 ];
 document.getElementById("tbl").innerHTML = `<thead><tr><th>Grootheid</th><th>Waarde</th><th>Hoe bepaald</th></tr></thead><tbody>` +
   rows.map(([a, b, c]) => `<tr><td>${a}</td><td class="num">${b}</td><td>${c}</td></tr>`).join("") + "</tbody>";
+
+// Gekoppelde tijdschuif, schaalgetrouwe baan en twee robotaanzichten.
+lineChart("c-command", {x:D.t, series:[{name:"Motoropdracht",y:D.pwr,color:"--s2"}],xLabel:"tijd sinds start (s)",yUnit:"/1000",yInclude:[0],aria:"Motoropdracht tegen tijd"});
+lineChart("c-response", {x:D.speed.map(r=>r[0]), series:[{name:"Snelheid",y:D.speed.map(r=>r[1]),color:"--s1"}],xLabel:"tijd sinds start (s)",yUnit:"m/s",yInclude:[0],aria:"Reactie van de robot: snelheid tegen tijd"});
+document.getElementById("rest-angles").innerHTML = [
+  ["Pitch",S.pitch_rust_deg,S.pitch_eind_deg], ["Roll",S.roll_rust_deg,S.roll_eind_deg]
+].map(([name,a,b])=>`<tr><td>${name}</td><td>${sgn(a)}°</td><td>${b==null?"Geen eindrustmeting":sgn(b)+"°"}</td></tr>`).join("");
+const slider=document.getElementById("replay"); slider.max=D.t.length-1; slider.value=0;
+const ymin=Math.min(0,...D.y.map(v=>v/100)), ymax=Math.max(0,...D.y.map(v=>v/100));
+const xmin=Math.min(0,...D.x), xmax=Math.max(0,...D.x);
+const scale=Math.min(440/Math.max(.2,xmax-xmin),230/Math.max(.2,ymax-ymin));
+const TX=v=>300+(v-(xmin+xmax)/2)*scale, TY=v=>155-(v-(ymin+ymax)/2)*scale;
+const route=D.x.map((v,i)=>`${i && D.t[i]-D.t[i-1]<.1?'L':'M'}${TX(v)},${TY(D.y[i]/100)}`).join(' ');
+const path=document.getElementById("path-view");
+path.innerHTML=`<svg viewBox="0 0 600 310" role="img" aria-label="Geschatte baan op gelijke schaal"><line x1="30" x2="570" y1="${TY(0)}" y2="${TY(0)}" stroke="var(--ink-3)" stroke-dasharray="5 5"/><path d="${route}" fill="none" stroke="var(--s1)" stroke-width="3"/><circle cx="${TX(0)}" cy="${TY(0)}" r="5" fill="var(--s2)"/><text x="${TX(0)+8}" y="${TY(0)-10}">Start</text><circle cx="${TX(D.x.at(-1))}" cy="${TY(D.y.at(-1)/100)}" r="5" fill="var(--s2)"/><text x="${TX(D.x.at(-1))+8}" y="${TY(D.y.at(-1)/100)+20}">Einde</text><g id="robot-marker"><path d="M-10,-7 L10,0 L-10,7 Z" fill="var(--s1)" stroke="var(--ink)"/></g><text x="30" y="290">Schaal: ${nl(100/scale)} m per 100 beeldpunten</text></svg>`;
+function updateReplay(){
+  const k=Number(slider.value),t=D.t[k];
+  const speed=D.speed.reduce((a,b)=>Math.abs(b[0]-t)<Math.abs(a[0]-t)?b:a)[1];
+  document.getElementById("replay-info").textContent=`${nl(t)} s · fase: ${D.fase[k]} · ${sgn(speed)} m/s · opdracht ${D.pwr[k]}/1000 · afstand ${nl(D.afstand[k])} m · X ${sgn(D.x[k])} m · Y ${sgn(D.y[k],1)} cm`;
+  document.getElementById("robot-marker").setAttribute("transform",`translate(${TX(D.x[k])} ${TY(D.y[k]/100)}) rotate(${-D.heading[k]})`);
+  document.getElementById("pose-view").innerHTML=`<svg viewBox="0 0 600 310" role="img" aria-label="Pitch en roll op geselecteerd tijdstip"><text x="150" y="35" text-anchor="middle">Zijaanzicht · pitch ${sgn(D.pitch[k],1)}°</text><text x="450" y="35" text-anchor="middle">Vooraanzicht · roll ${sgn(D.roll[k],1)}°</text><path d="M30 190H270 M330 190H570" stroke="var(--ink-3)" stroke-dasharray="4 4"/><g transform="translate(150 170) rotate(${-D.pitch[k]})"><rect x="-70" y="-40" width="140" height="40" rx="9" fill="var(--s1)"/><path d="M50 -50L75 -20L50 -20" fill="var(--s2)"/><circle cx="-45" cy="8" r="18" fill="var(--ink-2)"/><circle cx="45" cy="8" r="18" fill="var(--ink-2)"/></g><g transform="translate(450 170) rotate(${-D.roll[k]})"><rect x="-65" y="-40" width="130" height="40" rx="9" fill="var(--s2)"/><rect x="-80" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/><rect x="58" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/></g><text x="215" y="240" text-anchor="middle">Neus →</text><text x="385" y="240" text-anchor="middle">Rechts</text><text x="515" y="240" text-anchor="middle">Links</text><text x="300" y="285" text-anchor="middle">Schematisch · hoeken op werkelijke schaal</text></svg>`;
+}
+slider.oninput=updateReplay; updateReplay();
+}
+function selectRide() {
+  const ride = rides.find((ride) => ride.summary.rit === selector.value);
+  if (ride) renderRide(ride);
+}
+selector.value = rides.some((ride) => ride.summary.rit === DATA.selected) ? DATA.selected : rides[0]?.summary.rit;
+selector.addEventListener("change", selectRide);
+selectRide();
 </script>

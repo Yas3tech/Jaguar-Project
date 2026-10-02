@@ -1,7 +1,7 @@
 """Analyse van een rit-log (fase1_rechtdoor_imu.py): rechtlijnigheid en niveau.
 
 Gebruik:  python analyse_rit.py [ritten/rit_....csv]   (standaard de nieuwste rit)
-Schrijft ritten/<rit>_analyse.json en ritten/<rit>_dashboard.html.
+Schrijft ritten/<rit>_analyse.json en één dashboard.html met een ritselector.
 
 Aannames (Jaguar-handleiding + config OutDoorRobotConfig_4x4.xml):
   - ADXL345 full-res: 256 LSB/g  (in rust leest Z ~254)
@@ -50,7 +50,8 @@ def load(path):
                     motor.append((t, fase, board, key, [int(v) for v in val.split(":")]))
     dejitter(imu, 0.02, get=lambda s: s["t"], put=lambda s, t: s.__setitem__("t", t))
     for board, rows in enc.items():
-        cycle = st.median(b[0] - a[0] for a, b in zip(rows, rows[1:]) if b[0] - a[0] > 0.1)
+        gaps = [b[0] - a[0] for a, b in zip(rows, rows[1:]) if b[0] - a[0] > 0.1]
+        cycle = st.median(gaps) if gaps else 0.2
         dejitter(rows, 0.9 * cycle, get=lambda r: r[0], put=None)
     return imu, enc, motor
 
@@ -100,7 +101,10 @@ def rnd(v, d=3):
 
 def analyse(path):
     imu, enc, motor = load(path)
-    t_drive = next(s["t"] for s in imu if s["fase"] == "rijden")
+    drive_phases = {"rijden", "heen", "terug"}
+    if not imu or not any(s["fase"] in drive_phases for s in imu) or not any(s["fase"] == "rust" for s in imu) or any(len(v) < 2 for v in enc.values()):
+        raise ValueError("Log mist IMU, rustfase, rijfase of encoders van beide drivers.")
+    t_drive = next(s["t"] for s in imu if s["fase"] in drive_phases)
     rest = [s for s in imu if s["fase"] == "rust"]
     bias = [st.mean(s["g"][i] for s in rest) for i in range(3)]
     acc_rest = [st.mean(s["a"][i] for s in rest) for i in range(3)]
@@ -123,11 +127,16 @@ def analyse(path):
         dt = et[i] - et[i - 1]
         if dt > 0.05:
             speed.append(((et[i] + et[i - 1]) / 2 - t_drive, (dist[i] - dist[i - 1]) / dt))
-    v_max = max(v for _, v in speed)
-    v_ref = st.median(v for _, v in speed if v > 0.5 * v_max)
+    v_max = max(abs(v) for _, v in speed)
+    v_ref = st.median(abs(v) for _, v in speed if abs(v) > 0.05) if v_max > 0.05 else v_max
     p_max = max(abs(s["pwr"]) for s in imu)
-    full = [s["t"] - t_drive for s in imu if abs(s["pwr"]) == p_max]
-    steady = [(t, v) for t, v in speed if v > 0.85 * v_ref and full[0] <= t <= full[-1]]
+    def sample_at(t):
+        return min(imu, key=lambda s: abs(s["t"] - (t + t_drive)))
+    steady = [(t, v) for t, v in speed if abs(v) > 0.85 * v_ref
+              and sample_at(t)["fase"] in drive_phases
+              and p_max > 0 and abs(sample_at(t)["pwr"]) >= 0.95 * p_max]
+    if not steady:
+        steady = [(t, v) for t, v in speed if sample_at(t)["fase"] in drive_phases]
     t_steady = (steady[0][0], steady[-1][0])
 
     # IMU in fysische eenheden, koers integreren, pad reconstrueren
@@ -172,7 +181,7 @@ def analyse(path):
         i += n_vib
 
     def in_steady(t):
-        return t_steady[0] <= t <= t_steady[1]
+        return any(abs(t - q) <= 0.12 for q, _ in steady)
 
     def rms_dev(vals, idx):
         m = st.mean(vals[k] for k in idx)
@@ -180,25 +189,40 @@ def analyse(path):
 
     idx_steady = [k for k, t in enumerate(ts) if in_steady(t)]
     idx_rest = [k for k, s in enumerate(imu) if s["fase"] == "rust"]
-    end = max(range(len(ts)), key=lambda k: s_at[k])
+    end = len(ts) - 1
+    after = [k for k, s in enumerate(imu) if s["fase"] == "uitbollen" and ts[k] >= ts[-1] - 0.5]
+    def final_angle(vals):
+        return rnd(st.mean(vals[k] for k in after), 2) if after else None
 
     def motor_vals(key, fase, idx, scale):
         v = [m[4][idx] for m in motor if m[3] == key and m[1] == fase]
         return v and [scale * x for x in v]
 
-    amps = [abs(a) / 10 for m in motor if m[3] == "A" and m[1] == "rijden" for a in m[4]]
+    amps = [abs(a) / 10 for m in motor if m[3] == "A" and m[1] in drive_phases for a in m[4]]
     batt_start = motor_vals("V", "rust", 1, 0.1)
-    batt_drive = motor_vals("V", "rijden", 1, 0.1)
+    batt_drive = [m[4][1] * 0.1 for m in motor if m[3] == "V" and m[1] in drive_phases]
     temps = [t for m in motor if m[3] == "T" for t in m[4]]
 
-    total = dist[-1]
+    start_e = max(0, next((i for i, t in enumerate(et) if t >= t_drive), 1) - 1)
+    def travelled(vals):
+        out = [0.0] * len(vals)
+        for i in range(start_e + 1, len(vals)):
+            out[i] = out[i-1] + abs(vals[i] - vals[i-1])
+        return out
+    cumulative = travelled(dist)
+    total = cumulative[-1]
     summary = {
         "rit": Path(path).stem,
+        "rittype": "heen en terug" if any(s["fase"] == "terug" for s in imu) else "rechtdoor",
+        "verplaatsing_m": rnd(dist[-1], 2),
+        "snelheid_max_ms": rnd(v_max, 2),
+        "pitch_eind_deg": final_angle(pitch),
+        "roll_eind_deg": final_angle(roll),
         "afstand_m": rnd(total, 2),
-        "afstand_links_m": rnd(left[-1], 2),
-        "afstand_rechts_m": rnd(right[-1], 2),
-        "snelheid_ms": rnd(st.mean(v for _, v in steady), 2),
-        "rijtijd_s": rnd(t_steady[1] - t_steady[0], 1),
+        "afstand_links_m": rnd(travelled(left)[-1], 2),
+        "afstand_rechts_m": rnd(travelled(right)[-1], 2),
+        "snelheid_ms": rnd(st.mean(abs(v) for _, v in steady), 2),
+        "rijtijd_s": rnd(sum(imu[i+1]["t"] - s["t"] for i, s in enumerate(imu[:-1]) if s["fase"] in drive_phases), 1),
         "koersdrift_gyro_deg": rnd(heading[end], 2),
         "koersdrift_encoder_deg": rnd(enc_heading[-1], 2),
         "zijdelings_eind_cm": rnd(y[end] * 100, 1),
@@ -217,7 +241,7 @@ def analyse(path):
         "trilling_z_rust_g": rnd(rms_dev(az, idx_rest), 3),
         "piek_z_g": rnd(max(abs(az[k] - 1) for k in idx_steady), 2),
         "optrekken_g": rnd(max(moving_avg(ax, 10)[k] for k, t in enumerate(ts) if 0 <= t <= 1.0) - acc_rest[0] / ACC_LSB_G, 2),
-        "remmen_g": rnd(min(moving_avg(ax, 10)[k] for k, t in enumerate(ts) if t > t_steady[1]) - acc_rest[0] / ACC_LSB_G, 2),
+        "remmen_g": rnd(min(moving_avg(ax, 10)[k] for k, t in enumerate(ts) if t >= t_steady[1]) - acc_rest[0] / ACC_LSB_G, 2),
         "gyro_bias_counts": [rnd(b, 2) for b in bias],
         "stroom_max_a": rnd(max(amps), 1) if amps else None,
         "batterij_start_v": rnd(st.mean(batt_start), 1) if batt_start else None,
@@ -230,6 +254,8 @@ def analyse(path):
     series = {
         "t": [rnd(t, 3) for t in ts],
         "s": [rnd(v, 3) for v in s_at],
+        "fase": [s["fase"] for s in imu],
+        "afstand": [rnd(interp(et, cumulative, t + t_drive), 3) if t >= 0 else 0 for t in ts],
         "pwr": [s["pwr"] for s in imu],
         "ax": [rnd(v, 3) for v in ax], "ay": [rnd(v, 3) for v in ay], "az": [rnd(v, 3) for v in az],
         "gz": [rnd(v, 2) for v in gz],
@@ -243,17 +269,31 @@ def analyse(path):
     return {"summary": summary, "series": series}
 
 
+def write_dashboard(analysis_dir, selected_rit):
+    """Bundel alle analyses in één HTML, ook rechtstreeks te openen via file://."""
+    rides = [json.loads(p.read_text(encoding="utf-8"))
+             for p in sorted(analysis_dir.glob("rit_*_analyse.json"), reverse=True)]
+    payload = {"rides": rides, "selected": selected_rit}
+    # Een bestandsnaam mag het JSON-scriptblok niet afsluiten.
+    data = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
+    html = TEMPLATE.read_text(encoding="utf-8").replace("__RIT_DATA__", data)
+    out_html = HERE / "dashboard.html"
+    out_html.write_text(html, encoding="utf-8")
+    return out_html
+
+
 def main():
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else max((HERE / "ritten").glob("rit_*.csv"))
+    paths = list((HERE / "ritten").glob("rit_*.csv"))
+    if len(sys.argv) <= 1 and not paths:
+        raise SystemExit("Geen rit-CSV gevonden.")
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else max(paths, key=lambda p: p.stat().st_mtime)
     result = analyse(path)
     out_json = path.with_name(path.stem + "_analyse.json")
-    out_json.write_text(json.dumps(result, separators=(",", ":")))
+    out_json.write_text(json.dumps(result, separators=(",", ":")), encoding="utf-8")
     for k, v in result["summary"].items():
         print(f"{k:26} {v}")
     if TEMPLATE.exists():
-        html = TEMPLATE.read_text(encoding="utf-8").replace("__RIT_DATA__", json.dumps(result, separators=(",", ":")))
-        out_html = path.with_name(path.stem + "_dashboard.html")
-        out_html.write_text(html, encoding="utf-8")
+        out_html = write_dashboard(path.parent, result["summary"]["rit"])
         print(f"Dashboard: {out_html}")
 
 
