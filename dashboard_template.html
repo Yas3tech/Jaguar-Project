@@ -88,7 +88,30 @@ th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--gri
 th { font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 td.num { font-family: var(--f-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
+.replay-row { display: flex; align-items: center; gap: 12px; }
+.replay-row input { flex: 1; min-width: 0; }
+.play { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--ink); font: 600 13px var(--f-body); cursor: pointer; }
+.play:hover { border-color: var(--ink-3); }
+.play:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.play svg { width: 12px; height: 12px; fill: currentColor; }
+.pose3d { position: relative; aspect-ratio: 600 / 310; border-radius: 4px; overflow: hidden; background: var(--band); cursor: grab; touch-action: none; }
+.pose3d:active { cursor: grabbing; }
+.pose3d canvas { display: block; width: 100% !important; height: 100% !important; }
+.pose3d .hud { position: absolute; left: 10px; top: 8px; display: grid; gap: 1px; font-family: var(--f-data); font-size: 12px; color: var(--ink-2); pointer-events: none; font-variant-numeric: tabular-nums; }
+.pose3d .hud b { color: var(--ink); font-weight: 500; }
+.terrain3d { aspect-ratio: 16 / 7; min-height: 260px; }
+.terrain-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; }
+.exag { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.exag input { width: 140px; }
+.exag output { font-family: var(--f-data); font-size: 12px; min-width: 3.5ch; }
+.ev-num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--warn); color: #17201d; font: 600 11px var(--f-data); }
+.ev-row { cursor: pointer; }
+.ev-row:hover td { background: var(--band); }
+.ev-row:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
+.empty { font-size: 13.5px; color: var(--ink-3); padding: 8px 2px; }
+.pose3d .hint { position: absolute; right: 10px; bottom: 6px; font-family: var(--f-data); font-size: 11px; color: var(--ink-3); pointer-events: none; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <div class="wrap">
   <header>
@@ -104,13 +127,22 @@ tr:last-child td { border-bottom: 0; }
 
   <section>
     <div class="sec-head"><h2>Ritverkenner</h2><p>Sleep de tijdschuif. Baan en robotstand zijn schattingen. Alle grafieken tonen de volledige rit, inclusief terugrijden en uitbollen.</p></div>
-    <div class="panel"><label for="replay">Tijdstip in de rit</label><input id="replay" type="range" min="0" value="0" step="1"><output id="replay-info" aria-live="polite"></output></div>
+    <div class="panel"><label for="replay">Tijdstip in de rit</label><div class="replay-row"><button id="play" class="play" type="button" aria-pressed="false"></button><input id="replay" type="range" min="0" value="0" step="1"></div><output id="replay-info" aria-live="polite"></output></div>
     <div class="grid2">
       <div class="panel"><h3>Geschatte baan · bovenaanzicht</h3><div id="path-view" class="chart"></div><p class="note">Gelijke schaal op beide assen. Stippellijn = ideale startlijn. Links is boven; rechts is onder. Marker volgt de tijdschuif.</p></div>
-      <div class="panel"><h3>Robotstand · pitch en roll</h3><div id="pose-view" class="chart"></div><p class="note">Pitch: neus omhoog/omlaag. Roll: linker-/rechterkant omhoog. Hoeken komen uit de accelerometer en reageren ook op versnelling.</p></div>
+      <div class="panel"><h3>Robotstand · 3D</h3><div id="pose-view" class="chart"></div><p class="note">Pitch: neus omhoog/omlaag. Roll: linker-/rechterkant omhoog. Koers uit de gyro; de vloer schuift mee met de geschatte baan en de wielen draaien met de encoderafstand. Hoeken komen uit de accelerometer en reageren ook op versnelling. Sleep om rond te kijken, scroll om te zoomen.</p></div>
     </div>
     <div class="panel"><h3>Motoropdracht en gemeten snelheid</h3><div class="grid2"><div id="c-command" class="chart"></div><div id="c-response" class="chart"></div></div><p class="note">Motoropdracht is geen snelheid. Negatieve opdracht en snelheid betekenen achteruitrijden.</p></div>
     <div class="tablewrap"><table><thead><tr><th>Stand bij stilstand</th><th>Voor de rit</th><th>Na de rit</th></tr></thead><tbody id="rest-angles"></tbody></table></div>
+  </section>
+
+  <section id="terrain-sec">
+    <div class="sec-head"><h2>Pad in 3D: hoogte en gebeurtenissen</h2><p>Hoogte = sin(pitch) × encoderafstand, t.o.v. het vlak waarop de robot in rust stond. In stilstand komt de pitch uit de accelerometer; tijdens het rijden uit de gyro, bijgesteld op de rusthoeken voor en na (de accelerometer geeft door trillingen een schijnbare helling). Het profiel is een schatting met een onzekerheid van enkele millimeters per meter, geen landmeting.</p></div>
+    <div class="panel"><div class="terrain-head"><h3>Pad in 3D · kleur = hoogte</h3><label class="exag">Hoogte overdrijven <input id="exag" type="range" min="1" max="50" step="1"><output id="exag-out" for="exag"></output></label></div><div id="terrain-view" class="chart"></div><p class="note" id="note-terrain"></p></div>
+    <div class="grid2">
+      <div class="panel"><h3>Hoogteprofiel langs de afgelegde weg</h3><div id="c-height" class="chart"></div><p class="note">Heen en terug liggen na elkaar op de as. Over hetzelfde pad zou de terugweg het spiegelbeeld van de heenweg zijn; verschillen tonen hoe onzeker de schatting is.</p></div>
+      <div class="panel"><h3>Gebeurtenissen</h3><div id="events"></div><p class="note">Klik een rij om de tijdschuif erheen te zetten. Vastgelopen: vermogen aan maar &lt; 15 % van de normale snelheid. Schuin: pitch of roll &gt; 7° t.o.v. rust, minstens 1 s. Vrije val: totale versnelling &lt; 0,35 g. Wielen vrij: veel sneller dan normaal (opgetild of in de lucht).</p></div>
+    </div>
   </section>
 
   <section>
@@ -188,7 +220,207 @@ rides.forEach((ride) => {
 });
 document.getElementById("rit-count").textContent = `${rides.length} ${rides.length === 1 ? "rit" : "ritten"}`;
 const observers = [];
+// Sleep = rond het doel draaien, scroll = zoomen. `view` bevat yaw, tilt, dist en de zoomgrenzen.
+function orbitControls(box, view, draw) {
+  let drag = null;
+  box.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY]; box.setPointerCapture(e.pointerId); });
+  box.addEventListener("pointermove", (e) => { if (!drag) return; view.yaw -= (e.clientX - drag[0]) * 0.008; view.tilt = Math.min(1.45, Math.max(0.05, view.tilt + (e.clientY - drag[1]) * 0.006)); drag = [e.clientX, e.clientY]; draw(); });
+  box.addEventListener("pointerup", () => { drag = null; });
+  box.addEventListener("wheel", (e) => { e.preventDefault(); view.dist = Math.min(view.max, Math.max(view.min, view.dist * (1 + Math.sign(e.deltaY) * 0.08))); draw(); }, { passive: false });
+}
+function placeCamera(cam, view, target) {
+  const c = Math.cos(view.tilt) * view.dist;
+  cam.position.set(target.x + Math.cos(view.yaw) * c, target.y + Math.sin(view.tilt) * view.dist, target.z - Math.sin(view.yaw) * c);
+  cam.lookAt(target);
+}
+// 3D-robotstand: één Three.js-scène, hergebruikt bij elke rit. Zonder Three.js (offline) of WebGL valt het paneel terug op het 2D-schema.
+const pose3d = (() => {
+  if (!window.THREE) return null;
+  const T = THREE, css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  let renderer;
+  try { renderer = new T.WebGLRenderer({ antialias: true, alpha: true }); } catch (e) { return null; }
+  const box = document.createElement("div"); box.className = "pose3d";
+  box.innerHTML = '<div class="hud"></div><div class="hint">sleep om te draaien</div>';
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+  box.prepend(renderer.domElement);
+  const scene = new T.Scene(), cam = new T.PerspectiveCamera(32, 600 / 310, 0.05, 50);
+  scene.add(new T.HemisphereLight(0xffffff, 0x445048, 0.9));
+  const sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(2, 4, 3); scene.add(sun);
+  const mat = (c, o = {}) => new T.MeshStandardMaterial({ color: c, roughness: 0.6, metalness: 0.2, ...o });
+  const M = { body: mat(0x2b302e, { metalness: 0.4 }), plate: mat(0x4a514e, { metalness: 0.5 }), tyre: mat(0x1b1d1c, { roughness: 0.9 }),
+    hub: mat(0xb8bfbc, { metalness: 0.8, roughness: 0.3 }), s1: mat(0x2a78d6), s2: mat(0xeb6834), lens: mat(0x0b0d0c, { metalness: 0.9, roughness: 0.1 }) };
+  const add = (parent, geo, m, x = 0, y = 0, z = 0) => { const o = new T.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+  // Robotassen: +X vooruit, +Y omhoog, −Z links. Maten ≈ Jaguar 4x4 Wheel; wielstraal 0,135 m, spoorbreedte 0,52 m.
+  const R = 0.135, robot = new T.Group(), chassis = new T.Group(); scene.add(robot); robot.add(chassis); chassis.position.y = R;
+  add(chassis, new T.BoxGeometry(0.64, 0.12, 0.34), M.body, 0, 0.02, 0);
+  add(chassis, new T.BoxGeometry(0.6, 0.012, 0.36), M.plate, 0, 0.086, 0);
+  add(chassis, new T.BoxGeometry(0.66, 0.02, 0.36), M.s2, 0, -0.03, 0);
+  add(chassis, new T.BoxGeometry(0.04, 0.08, 0.3), M.plate, 0.34, 0, 0);
+  add(chassis, new T.BoxGeometry(0.04, 0.08, 0.3), M.plate, -0.34, 0, 0);
+  const head = add(chassis, new T.BoxGeometry(0.07, 0.05, 0.09), M.plate, 0.27, 0.12, 0);
+  add(head, new T.CylinderGeometry(0.018, 0.018, 0.02, 20), M.lens, 0.04, 0, 0).rotation.z = Math.PI / 2;
+  add(chassis, new T.CylinderGeometry(0.006, 0.006, 0.26, 8), M.hub, -0.22, 0.22, 0.1);
+  add(chassis, new T.CylinderGeometry(0.035, 0.035, 0.02, 24), M.s1, -0.22, 0.36, 0.1);
+  add(chassis, new T.BoxGeometry(0.16, 0.03, 0.12), M.plate, -0.05, 0.11, 0);
+  add(chassis, new T.ConeGeometry(0.035, 0.09, 3), M.s1, 0.17, 0.11, 0).rotation.z = -Math.PI / 2;
+  const wheels = [];
+  const tyreGeo = new T.CylinderGeometry(R, R, 0.09, 36), knob = new T.BoxGeometry(0.022, 0.095, 0.03), hubGeo = new T.CylinderGeometry(0.05, 0.05, 0.1, 6);
+  for (const x of [0.23, -0.23]) for (const z of [-0.26, 0.26]) {
+    const spin = new T.Group(); spin.position.set(x, R, z); robot.add(spin); wheels.push(spin);
+    add(spin, tyreGeo, M.tyre).rotation.x = Math.PI / 2;
+    add(spin, hubGeo, M.hub).rotation.x = Math.PI / 2;
+    for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 2, k = add(spin, knob, M.tyre, Math.cos(a) * R, Math.sin(a) * R, 0); k.rotation.set(Math.PI / 2, 0, a); }
+  }
+  // Vloer: raster dat met de geschatte positie meeschuift, plus de ideale startlijn (Y = 0).
+  const floor = new T.Group(); scene.add(floor);
+  const startLine = add(floor, new T.BoxGeometry(60, 0.002, 0.012), mat(0xffffff), 0, 0.001, 0);
+  let grid;
+  function theme() {
+    if (grid) floor.remove(grid);
+    grid = new T.GridHelper(8, 32, new T.Color(css("--ink-3")), new T.Color(css("--rule"))); floor.add(grid);
+    M.s1.color.set(css("--s1")); M.s2.color.set(css("--s2")); startLine.material.color.set(css("--s2"));
+  }
+  theme();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { theme(); draw(); });
+  const view = { yaw: -0.75, tilt: 0.42, dist: 1.9, min: 1, max: 4 }, target = new T.Vector3(0, 0.15, 0);
+  orbitControls(box, view, () => draw());
+  function draw() {
+    const w = box.clientWidth, h = box.clientHeight;
+    if (!w) return;
+    if (renderer.domElement.width !== Math.round(w * renderer.getPixelRatio())) { renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }
+    placeCamera(cam, view, target);
+    renderer.render(scene, cam);
+  }
+  new ResizeObserver(draw).observe(box);
+  const rad = Math.PI / 180;
+  return {
+    el: box,
+    set({ pitch, roll, heading, x, y, rollDist, hud }) {
+      // Pitch + = neus omhoog, roll + = linkerkant hoger, koers + = naar links.
+      robot.rotation.set(roll * rad, heading * rad, pitch * rad, "YZX");
+      // De robot blijft in beeld; de vloer schuift eronder door (Y links = −Z).
+      floor.position.set(-x, 0, y);
+      grid.position.set(Math.round(x * 4) / 4, 0, -Math.round(y * 4) / 4);
+      wheels.forEach((w) => { w.rotation.z = -rollDist / R; });
+      box.querySelector(".hud").innerHTML = hud;
+      draw();
+    },
+  };
+})();
+// 3D-pad: lint over de geschatte baan met de hoogte (overdreven), gekleurd van laag (blauw) naar hoog (oranje).
+// Wereldassen zoals de robotstand: +X vooruit bij de start, +Y omhoog, −Z links.
+const terrain3d = (() => {
+  if (!window.THREE) return null;
+  const T = THREE, css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  let renderer;
+  try { renderer = new T.WebGLRenderer({ antialias: true, alpha: true }); } catch (e) { return null; }
+  const box = document.createElement("div"); box.className = "pose3d terrain3d";
+  box.innerHTML = '<div class="hud"></div><div class="hint">sleep om te draaien · scroll om te zoomen</div>';
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+  box.prepend(renderer.domElement);
+  const scene = new T.Scene(), cam = new T.PerspectiveCamera(35, 16 / 7, 0.02, 200);
+  scene.add(new T.HemisphereLight(0xffffff, 0x445048, 0.95));
+  const sun = new T.DirectionalLight(0xffffff, 0.6); sun.position.set(3, 6, 2); scene.add(sun);
+  const world = new T.Group(); scene.add(world);
+  const marker = new T.Group(); scene.add(marker);
+  const mBody = new T.MeshStandardMaterial({ color: 0x2b302e, roughness: 0.5, metalness: 0.4 });
+  const mNose = new T.MeshStandardMaterial({ color: 0x2a78d6 });
+  const body = new T.Mesh(new T.BoxGeometry(0.64, 0.16, 0.52), mBody); body.position.y = 0.1; marker.add(body);
+  const nose = new T.Mesh(new T.ConeGeometry(0.08, 0.2, 3), mNose); nose.rotation.z = -Math.PI / 2; nose.position.set(0.24, 0.22, 0); marker.add(nose);
+  const view = { yaw: -1.1, tilt: 0.55, dist: 6, min: 0.5, max: 60 }, target = new T.Vector3();
+  orbitControls(box, view, () => draw());
+  function draw() {
+    const w = box.clientWidth, h = box.clientHeight;
+    if (!w) return;
+    if (renderer.domElement.width !== Math.round(w * renderer.getPixelRatio())) { renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }
+    placeCamera(cam, view, target);
+    renderer.render(scene, cam);
+  }
+  new ResizeObserver(draw).observe(box);
+  const label = (text) => {
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const g = c.getContext("2d");
+    g.fillStyle = css("--warn"); g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#17201d"; g.font = "600 30px IBM Plex Mono, monospace"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(text, 32, 34);
+    const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(c), depthTest: false }));
+    sp.scale.set(0.22, 0.22, 1); sp.renderOrder = 2; return sp;
+  };
+  let D = null, exag = 1, zMin = 0, zMax = 0, events = [];
+  function build() {
+    world.clear();
+    const lo = new T.Color(css("--s1")), hi = new T.Color(css("--s2")), mid = new T.Color(css("--rule"));
+    mNose.color.set(css("--s1"));
+    const P = (i) => new T.Vector3(D.x[i], (D.z[i] / 100) * exag, -D.y[i] / 100);
+    const pass = (fase) => D.fase.map((f, i) => i).filter((i) => D.t[i] >= 0 && (fase ? D.fase[i] === fase : true));
+    const base = (zMin / 100) * exag - 0.03;
+    // Eén lint per rijrichting; terug iets smaller en hoger zodat beide zichtbaar blijven.
+    const legs = D.fase.includes("terug") ? [["heen", 0.52, 0], ["terug", 0.3, 0.004]] : [[null, 0.52, 0]];
+    for (const [fase, width, lift] of legs) {
+      const idx = [];
+      for (const i of pass(fase)) if (!idx.length || Math.abs(D.afstand[i] - D.afstand[idx.at(-1)]) > 0.01) idx.push(i);
+      if (idx.length < 2) continue;
+      const pos = [], col = [], wall = [], tri = [], wtri = [];
+      idx.forEach((i, k) => {
+        const c = P(i), a = -D.heading[i] * Math.PI / 180;
+        const side = new T.Vector3(-Math.sin(a), 0, -Math.cos(a)).multiplyScalar(width / 2);
+        pos.push(c.x + side.x, c.y + lift + 0.002, c.z + side.z, c.x - side.x, c.y + lift + 0.002, c.z - side.z);
+        const f = zMax > zMin ? (D.z[i] - zMin) / (zMax - zMin) : 0.5;
+        const color = f < 0.5 ? lo.clone().lerp(mid, f * 2) : mid.clone().lerp(hi, f * 2 - 1);
+        col.push(color.r, color.g, color.b, color.r, color.g, color.b);
+        wall.push(c.x, c.y, c.z, c.x, base, c.z);
+        if (k) { const j = 2 * k; tri.push(j - 2, j - 1, j, j - 1, j + 1, j); wtri.push(j - 2, j - 1, j, j - 1, j + 1, j); }
+      });
+      const g = new T.BufferGeometry();
+      g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.setAttribute("color", new T.Float32BufferAttribute(col, 3));
+      g.setIndex(tri); g.computeVertexNormals();
+      world.add(new T.Mesh(g, new T.MeshStandardMaterial({ vertexColors: true, side: T.DoubleSide, roughness: 0.8 })));
+      if (!lift) {
+        const wg = new T.BufferGeometry(); wg.setAttribute("position", new T.Float32BufferAttribute(wall, 3)); wg.setIndex(wtri);
+        world.add(new T.Mesh(wg, new T.MeshBasicMaterial({ color: new T.Color(css("--ink-3")), transparent: true, opacity: 0.18, side: T.DoubleSide, depthWrite: false })));
+      }
+    }
+    // Rooster op het laagste punt, ideale startlijn en de gebeurtenissen als genummerde pinnen.
+    const xs = D.x, ys = D.y.map((v) => -v / 100);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const span = Math.max(1, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    const size = Math.ceil(span + 2), grid = new T.GridHelper(size, size * 2, new T.Color(css("--ink-3")), new T.Color(css("--rule")));
+    grid.position.set(Math.round(cx * 2) / 2, base, Math.round(cz * 2) / 2); world.add(grid);
+    const line = new T.Mesh(new T.BoxGeometry(size, 0.003, 0.015), new T.MeshBasicMaterial({ color: new T.Color(css("--s2")) }));
+    line.position.set(cx, base + 0.002, 0); world.add(line);
+    events.forEach((e, n) => {
+      const top = (e.z * exag) + 0.45;
+      const pin = new T.Mesh(new T.CylinderGeometry(0.008, 0.008, top - base, 6), new T.MeshBasicMaterial({ color: new T.Color(css("--warn")) }));
+      pin.position.set(e.x, (top + base) / 2, -e.y); world.add(pin);
+      const sp = label(String(n + 1)); sp.position.set(e.x, top + 0.08, -e.y); world.add(sp);
+    });
+    target.set(cx, ((zMin + zMax) / 200) * exag, cz);
+    view.dist = Math.max(2.5, span * 1.25); view.min = 0.5; view.max = span * 6 + 5;
+  }
+  return {
+    el: box,
+    load(ride, ev) {
+      D = ride; events = ev;
+      zMin = Math.min(...D.z); zMax = Math.max(...D.z);
+      return { span: Math.max(...D.afstand), zSpan: zMax - zMin };
+    },
+    setExag(e) { exag = e; build(); draw(); },
+    set(k) {
+      if (!D) return;
+      const a = D.heading[k] * Math.PI / 180;
+      marker.position.set(D.x[k], (D.z[k] / 100) * exag, -D.y[k] / 100);
+      marker.rotation.set(0, a, Math.atan(Math.tan((D.pitch_f[k] || 0) * Math.PI / 180) * exag), "YZX");
+      box.querySelector(".hud").innerHTML = `<span>hoogte <b>${(D.z[k] >= 0 ? "+" : "−") + Math.abs(D.z[k]).toFixed(1).replace(".", ",")} cm</b></span><span>afgelegd <b>${D.afstand[k].toFixed(2).replace(".", ",")} m</b></span><span>hoogte ×${exag}</span>`;
+      draw();
+    },
+  };
+})();
+let playing = null;
+const playBtn = document.getElementById("play");
+const playIcon = (on) => { playBtn.innerHTML = on ? '<svg viewBox="0 0 12 12"><rect x="1.5" y="1" width="3" height="10"/><rect x="7.5" y="1" width="3" height="10"/></svg>Pauze' : '<svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg>Afspelen'; playBtn.setAttribute("aria-pressed", on); };
+playIcon(false);
+function stopPlay() { if (playing) cancelAnimationFrame(playing.raf); playing = null; playIcon(false); }
 function renderRide(RIT) {
+stopPlay();
 observers.splice(0).forEach((observer) => observer.disconnect());
 const S = RIT.summary, D = RIT.series;
 const nl = (v, d = 2) => (v == null ? "–" : Number(v).toLocaleString("nl-BE", { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -213,6 +445,10 @@ const verdicts = [
   [flat ? "good" : "warn", "Niveau", flat ? "kleine geschatte hoeken (< 1°)" : "grotere geschatte hoeken"],
   ["info", "Trilling Z", `${nl(S.trilling_z_rms_g, 2)} g RMS · eerste referentierit`],
 ];
+const EV = S.gebeurtenissen || [];
+if (S.gebeurtenissen) verdicts.splice(2, 0, EV.length
+  ? ["warn", "Gebeurtenissen", [...new Set(EV.map((e) => e.soort))].join(", ")]
+  : ["good", "Gebeurtenissen", "geen vastlopen, schuinstand of vrije val"]);
 document.getElementById("verdicts").innerHTML = verdicts.map(([c, k, v]) => `<span class="chip ${c}">${ICON[c]}<b>${k}</b> ${v}</span>`).join("");
 
 // --- Kerncijfers -------------------------------------------------------------
@@ -228,6 +464,8 @@ const tiles = [
   ["Roll na rust", S.roll_eind_deg == null ? "–" : sgn(S.roll_eind_deg), "°", "laatste 0,5 s van uitbollen"],
   ["Trilling Z", nl(S.trilling_z_rms_g, 2), "g RMS", `in rust ${nl(S.trilling_z_rust_g, 3)} g · piek ${nl(S.piek_z_g, 2)} g`],
 ];
+(S.doelen || []).forEach((d) => tiles.unshift([`Stopfout ${d.fase}`, d.fout_mm == null ? "–" : sgn(d.fout_mm, 1), "mm",
+  `doel ${sgn(d.doel_m, 3)} m · gemeten ${d.gemeten_m == null ? "–" : sgn(d.gemeten_m, 3)} m (encoders)`]));
 document.getElementById("tiles").innerHTML = tiles.map(([k, v, u, n]) => `<div class="tile"><span class="k">${k}</span><span class="v">${v}<small>${u}</small></span><span class="n">${n}</span></div>`).join("");
 
 document.getElementById("note-track").textContent =
@@ -354,7 +592,7 @@ lineChart("c-speed", {
 
 // --- Tabel -------------------------------------------------------------------
 const rows = [
-  ["Afgelegde afstand", `${nl(S.afstand_m)} m`, "som van absolute afstandsstappen; heen + terug; wielstraal 0,135 m"],
+  ["Afgelegde afstand", `${nl(S.afstand_m)} m`, `som van absolute afstandsstappen; heen + terug; wielstraal ${nl(S.wielstraal_m ?? 0.135, 4)} m`],
   ["Snelheid in geselecteerde rijmomenten", `${nl(S.snelheid_ms)} m/s`, `venster ${nl(S.steady_venster_s[0], 1)}–${nl(S.steady_venster_s[1], 1)} s na start`],
   ["Optrekken / remmen", `${sgn(S.optrekken_g)} / ${sgn(S.remmen_g)} g`, "X-as accelerometer, bevestigt X = vooruit"],
   ["Koersdrift gyro", `${sgn(S.koersdrift_gyro_deg)}°`, "ITG3205, 14,375 LSB per °/s (datasheet); bias in rust afgetrokken"],
@@ -378,6 +616,37 @@ document.getElementById("rest-angles").innerHTML = [
   ["Pitch",S.pitch_rust_deg,S.pitch_eind_deg], ["Roll",S.roll_rust_deg,S.roll_eind_deg]
 ].map(([name,a,b])=>`<tr><td>${name}</td><td>${sgn(a)}°</td><td>${b==null?"Geen eindrustmeting":sgn(b)+"°"}</td></tr>`).join("");
 const slider=document.getElementById("replay"); slider.max=D.t.length-1; slider.value=0;
+// --- Pad in 3D, hoogteprofiel en gebeurtenissen
+const hasZ = Array.isArray(D.z);
+document.getElementById("terrain-sec").hidden = !hasZ;
+const exagIn = document.getElementById("exag"), exagOut = document.getElementById("exag-out");
+if (hasZ) {
+  const tv = document.getElementById("terrain-view");
+  if (terrain3d) {
+    tv.replaceChildren(terrain3d.el);
+    const { span, zSpan } = terrain3d.load(D, EV);
+    // Standaard zo overdrijven dat het hoogteverschil ongeveer 15 % van de padlengte wordt, maar
+    // verschillen onder 5 cm (meetonzekerheid) nooit opblazen tot een heuvel.
+    const auto = Math.round(Math.min(20, Math.max(1, (0.15 * Math.max(1, span)) / Math.max(0.05, zSpan / 100))));
+    exagIn.value = auto; exagOut.textContent = `×${auto}`;
+    exagIn.oninput = () => { exagOut.textContent = `×${exagIn.value}`; terrain3d.setExag(Number(exagIn.value)); terrain3d.set(Number(slider.value)); };
+    terrain3d.setExag(auto);
+  } else tv.innerHTML = '<p class="empty">3D niet beschikbaar (geen internet voor Three.js of geen WebGL).</p>';
+  document.getElementById("note-terrain").textContent = `Hoogte min ${sgn(S.hoogte_min_cm, 1)} cm · max ${sgn(S.hoogte_max_cm, 1)} cm · eind ${sgn(S.hoogte_eind_cm, 1)} cm.`
+    + (S.koppelkanteling_deg ? ` Koppelkanteling ${nl(S.koppelkanteling_deg, 2)}° afgetrokken: het chassis kantelt onder het motorkoppel, en heen en terug moeten op dezelfde hoogte eindigen.` : " Zonder terugrit kan de kanteling van het chassis onder het motorkoppel niet afgetrokken worden; lange ritten kunnen zo een schijnbare helling opbouwen.")
+    + " Genummerde pinnen = gebeurtenissen.";
+  const hi = idx.filter((i, k) => !k || D.afstand[i] !== D.afstand[idx[k - 1]]);
+  lineChart("c-height", { x: hi.map((i) => D.afstand[i]), series: [{ name: "Hoogte", y: hi.map((i) => D.z[i]), color: "--s1" }],
+    xLabel: "afgelegde weg (m)", yUnit: "cm", yUnitShort: "cm", yInclude: [-1, 1], tipDec: 1, aria: "Geschatte hoogte tegen afgelegde weg" });
+  const evEl = document.getElementById("events");
+  evEl.innerHTML = EV.length ? `<div class="tablewrap"><table><thead><tr><th>#</th><th>Wat</th><th>Tijd</th><th>Weg</th><th>Details</th></tr></thead><tbody>${EV.map((e, n) =>
+    `<tr class="ev-row" tabindex="0" data-t="${e.t0}"><td><span class="ev-num">${n + 1}</span></td><td>${e.soort}</td><td class="num">${nl(e.t0, 1)}–${nl(e.t1, 1)} s</td><td class="num">${nl(e.s, 2)} m</td><td>${e.detail}</td></tr>`).join("")}</tbody></table></div>`
+    : '<p class="empty">Niets gedetecteerd: geen vastlopen, schuinstand, vrije val of vrij draaiende wielen.</p>';
+  evEl.querySelectorAll(".ev-row").forEach((row) => {
+    const go = () => { stopPlay(); const t = Number(row.dataset.t); slider.value = Math.max(0, D.t.findIndex((v) => v >= t)); updateReplay(); };
+    row.onclick = go; row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+  });
+}
 const ymin=Math.min(0,...D.y.map(v=>v/100)), ymax=Math.max(0,...D.y.map(v=>v/100));
 const xmin=Math.min(0,...D.x), xmax=Math.max(0,...D.x);
 const scale=Math.min(440/Math.max(.2,xmax-xmin),230/Math.max(.2,ymax-ymin));
@@ -385,14 +654,38 @@ const TX=v=>300+(v-(xmin+xmax)/2)*scale, TY=v=>155-(v-(ymin+ymax)/2)*scale;
 const route=D.x.map((v,i)=>`${i && D.t[i]-D.t[i-1]<.1?'L':'M'}${TX(v)},${TY(D.y[i]/100)}`).join(' ');
 const path=document.getElementById("path-view");
 path.innerHTML=`<svg viewBox="0 0 600 310" role="img" aria-label="Geschatte baan op gelijke schaal"><line x1="30" x2="570" y1="${TY(0)}" y2="${TY(0)}" stroke="var(--ink-3)" stroke-dasharray="5 5"/><path d="${route}" fill="none" stroke="var(--s1)" stroke-width="3"/><circle cx="${TX(0)}" cy="${TY(0)}" r="5" fill="var(--s2)"/><text x="${TX(0)+8}" y="${TY(0)-10}">Start</text><circle cx="${TX(D.x.at(-1))}" cy="${TY(D.y.at(-1)/100)}" r="5" fill="var(--s2)"/><text x="${TX(D.x.at(-1))+8}" y="${TY(D.y.at(-1)/100)+20}">Einde</text><g id="robot-marker"><path d="M-10,-7 L10,0 L-10,7 Z" fill="var(--s1)" stroke="var(--ink)"/></g><text x="30" y="290">Schaal: ${nl(100/scale)} m per 100 beeldpunten</text></svg>`;
+// Getekende wielafstand: afstandsstappen met het teken van de laatste motoropdracht (terugrijden draait de wielen terug).
+const rollDist=[0]; let dir=1;
+for(let i=1;i<D.t.length;i++){ if(D.pwr[i]) dir=Math.sign(D.pwr[i]); rollDist.push(rollDist[i-1]+(D.afstand[i]-D.afstand[i-1])*dir); }
+const poseView=document.getElementById("pose-view");
+if(pose3d) poseView.replaceChildren(pose3d.el);
+// Afspelen in echte tijd vanaf de huidige schuifstand.
+playBtn.onclick=()=>{
+  if(playing){ stopPlay(); return; }
+  if(Number(slider.value)>=D.t.length-1) slider.value=0;
+  const t0=D.t[Number(slider.value)], start=performance.now();
+  playing={raf:0}; playIcon(true);
+  const step=(now)=>{
+    if(!playing) return;
+    const t=t0+(now-start)/1000; let k=Number(slider.value);
+    while(k<D.t.length-1 && D.t[k+1]<=t) k++;
+    slider.value=k; updateReplay();
+    if(k>=D.t.length-1){ stopPlay(); return; }
+    playing.raf=requestAnimationFrame(step);
+  };
+  playing.raf=requestAnimationFrame(step);
+};
 function updateReplay(){
   const k=Number(slider.value),t=D.t[k];
   const speed=D.speed.reduce((a,b)=>Math.abs(b[0]-t)<Math.abs(a[0]-t)?b:a)[1];
   document.getElementById("replay-info").textContent=`${nl(t)} s · fase: ${D.fase[k]} · ${sgn(speed)} m/s · opdracht ${D.pwr[k]}/1000 · afstand ${nl(D.afstand[k])} m · X ${sgn(D.x[k])} m · Y ${sgn(D.y[k],1)} cm`;
   document.getElementById("robot-marker").setAttribute("transform",`translate(${TX(D.x[k])} ${TY(D.y[k]/100)}) rotate(${-D.heading[k]})`);
-  document.getElementById("pose-view").innerHTML=`<svg viewBox="0 0 600 310" role="img" aria-label="Pitch en roll op geselecteerd tijdstip"><text x="150" y="35" text-anchor="middle">Zijaanzicht · pitch ${sgn(D.pitch[k],1)}°</text><text x="450" y="35" text-anchor="middle">Vooraanzicht · roll ${sgn(D.roll[k],1)}°</text><path d="M30 190H270 M330 190H570" stroke="var(--ink-3)" stroke-dasharray="4 4"/><g transform="translate(150 170) rotate(${-D.pitch[k]})"><rect x="-70" y="-40" width="140" height="40" rx="9" fill="var(--s1)"/><path d="M50 -50L75 -20L50 -20" fill="var(--s2)"/><circle cx="-45" cy="8" r="18" fill="var(--ink-2)"/><circle cx="45" cy="8" r="18" fill="var(--ink-2)"/></g><g transform="translate(450 170) rotate(${-D.roll[k]})"><rect x="-65" y="-40" width="130" height="40" rx="9" fill="var(--s2)"/><rect x="-80" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/><rect x="58" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/></g><text x="215" y="240" text-anchor="middle">Neus →</text><text x="385" y="240" text-anchor="middle">Rechts</text><text x="515" y="240" text-anchor="middle">Links</text><text x="300" y="285" text-anchor="middle">Schematisch · hoeken op werkelijke schaal</text></svg>`;
+  if(terrain3d && hasZ) terrain3d.set(k);
+  if(pose3d){ pose3d.set({pitch:D.pitch[k],roll:D.roll[k],heading:D.heading[k],x:D.x[k],y:D.y[k]/100,rollDist:rollDist[k],
+    hud:`<span>pitch <b>${sgn(D.pitch[k],1)}°</b></span><span>roll <b>${sgn(D.roll[k],1)}°</b></span><span>koers <b>${sgn(D.heading[k],1)}°</b></span>`}); return; }
+  poseView.innerHTML=`<svg viewBox="0 0 600 310" role="img" aria-label="Pitch en roll op geselecteerd tijdstip"><text x="150" y="35" text-anchor="middle">Zijaanzicht · pitch ${sgn(D.pitch[k],1)}°</text><text x="450" y="35" text-anchor="middle">Vooraanzicht · roll ${sgn(D.roll[k],1)}°</text><path d="M30 190H270 M330 190H570" stroke="var(--ink-3)" stroke-dasharray="4 4"/><g transform="translate(150 170) rotate(${-D.pitch[k]})"><rect x="-70" y="-40" width="140" height="40" rx="9" fill="var(--s1)"/><path d="M50 -50L75 -20L50 -20" fill="var(--s2)"/><circle cx="-45" cy="8" r="18" fill="var(--ink-2)"/><circle cx="45" cy="8" r="18" fill="var(--ink-2)"/></g><g transform="translate(450 170) rotate(${-D.roll[k]})"><rect x="-65" y="-40" width="130" height="40" rx="9" fill="var(--s2)"/><rect x="-80" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/><rect x="58" y="-15" width="22" height="45" rx="5" fill="var(--ink-2)"/></g><text x="215" y="240" text-anchor="middle">Neus →</text><text x="385" y="240" text-anchor="middle">Rechts</text><text x="515" y="240" text-anchor="middle">Links</text><text x="300" y="285" text-anchor="middle">Schematisch · hoeken op werkelijke schaal</text></svg>`;
 }
-slider.oninput=updateReplay; updateReplay();
+slider.oninput=()=>{ stopPlay(); updateReplay(); }; updateReplay();
 }
 function selectRide() {
   const ride = rides.find((ride) => ride.summary.rit === selector.value);
