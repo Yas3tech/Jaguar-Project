@@ -75,13 +75,11 @@ Wielen zonder vermogen hebben geen aandrijfslip en rollen mee met de grond, als 
 
 ## Live meekijken tijdens het rijden
 
-- **Browser (standaard aan):** elk rijscript opent `http://127.0.0.1:8765/` met live tegels en grafieken (`live_view.py`, `live.html`). Uitschakelen met `--no-live`.
-- **Grafana (`--mqtt`):** dezelfde live waarden gaan via MQTT naar InfluxDB, en het dashboard **Jaguar live** op http://localhost:3000 toont ze. De indeling volgt dit analysedashboard: kerncijfers, Ritverkenner (met plaats voor de camera), Pad in 3D (hoogte en gebeurtenissen), Tracking, Niveau en Trillingen. Opzetten: zie [grafana/README.md](grafana/README.md).
+- **Browser (standaard aan):** elk rijscript opent `http://127.0.0.1:8765/` met live tegels en grafieken (`live_view.py`, `live.html`). Alleen Python nodig. Uitschakelen met `--no-live`.
 - **Zonder robot testen:** `python nep_robot.py` speelt `testdata/demo_rit.csv` af. Rijd ertegen met `--ip 127.0.0.1 --duration 5 --no-csv`. Rijden op afstand werkt niet met de nep-robot, omdat die een vaste opname afspeelt.
 
 ```powershell
-cd grafana; docker compose up -d; cd ..
-python fase1_rechtdoor_imu.py --power 150 --distance 1 --mqtt --no-live
+python fase1_rechtdoor_imu.py --distance 1
 ```
 
 De live waarden zijn een benadering. Dit dashboard (`analyse_rit.py` op de CSV) blijft de definitieve meting. De CSV verandert niet door de live weergave.

@@ -2,7 +2,7 @@
 
 Gebruik (twee terminals):
   python nep_robot.py                                   # standaard testdata/demo_rit.csv
-  python fase1_rechtdoor_imu.py --ip 127.0.0.1 --mqtt --no-csv
+  python fase1_rechtdoor_imu.py --ip 127.0.0.1 --no-csv --duration 5
 
 De nep-robot luistert op 127.0.0.1:10001, net als de echte op 192.168.0.60:10001, en stuurt
 elke ontvangen regel uit de CSV opnieuw door in het oorspronkelijke tempo. Hij negeert
