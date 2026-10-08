@@ -40,6 +40,19 @@ python kalibreer.py 2.968
 
 Dit schrijft `kalibratie.json`. De rijscripts en de analyse gebruiken daarna die straal. Verwijder het bestand om terug te gaan naar 0,135 m.
 
+## Live meekijken tijdens het rijden
+
+- **Browser (standaard aan):** elk rijscript opent `http://127.0.0.1:8765/` met live tegels en grafieken (`live_view.py`, `live.html`). Uitschakelen met `--no-live`.
+- **Grafana (`--mqtt`):** dezelfde live waarden gaan via MQTT naar InfluxDB, en het dashboard **Jaguar live** op http://localhost:3000 toont ze. De indeling volgt dit analysedashboard: kerncijfers, Ritverkenner (met plaats voor de camera), Pad in 3D (hoogte en gebeurtenissen), Tracking, Niveau en Trillingen. Opzetten: zie [grafana/README.md](grafana/README.md).
+- **Zonder robot testen:** `python nep_robot.py` speelt `testdata/demo_rit.csv` af. Rijd ertegen met `--ip 127.0.0.1 --duration 5 --no-csv`. Rijden op afstand werkt niet met de nep-robot, omdat die een vaste opname afspeelt.
+
+```powershell
+cd grafana; docker compose up -d; cd ..
+python fase1_rechtdoor_imu.py --power 150 --distance 1 --mqtt --no-live
+```
+
+De live waarden zijn een benadering. Dit dashboard (`analyse_rit.py` op de CSV) blijft de definitieve meting. De CSV verandert niet door de live weergave.
+
 ## Dashboard
 
 Open `dashboard.html` in de projectmap en kies een rit met **Selecteer een rit**. Elke uitvoering van `python analyse_rit.py` werkt ditzelfde dashboard bij met alle `rit_*_analyse.json`-bestanden uit de map van de geanalyseerde CSV. De zojuist geanalyseerde rit is standaard geselecteerd. Ververs de browser na een nieuwe analyse. Er wordt geen apart HTML-bestand per rit meer gemaakt; bestaande HTML-rapporten blijven beschikbaar.

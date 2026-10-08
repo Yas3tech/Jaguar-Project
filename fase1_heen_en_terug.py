@@ -65,8 +65,9 @@ class PID:
 
 
 class Jaguar:
-    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None):
+    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, live=None):
         self.writer = writer
+        self.live = live      # live weergave (live_view / mqtt_stream): krijgt elke ontvangen regel
         self.t0 = time.perf_counter()
         self.phase = "rust"
         self.power = 0
@@ -127,6 +128,8 @@ class Jaguar:
 
     def _parse(self, line):
         self.note(line)
+        if self.live is not None:
+            self.live.feed(time.perf_counter() - self.t0, self.phase, self.power, line)
         if line.startswith("#"):
             p = line.split(",")
             if len(p) == 17 and p[3] == "GYRO":
@@ -365,10 +368,11 @@ class Jaguar:
 
 
 @contextmanager
-def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT):
+def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=True, mqtt=False):
     path = None
     f = None
     robot = None
+    view = None
     try:
         writer = None
         if record:
@@ -378,13 +382,23 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT):
             f = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(f)
             writer.writerow(["t", "fase", "vermogen", "regel"])
-        robot = Jaguar(ip, port, writer=writer)
+        name = path.stem if path else f"rit_{datetime.now():%Y%m%d_%H%M%S}_zonder_csv"
+        if live:
+            import live_view
+            view = live_view.start(name)
+        if mqtt:
+            from mqtt_stream import MqttStream
+            view = MqttStream(name, view)   # rekent via dezelfde LiveView en publiceert naar MQTT/Grafana
+        robot = Jaguar(ip, port, writer=writer, live=view)
         yield robot
     finally:
         try:
             if robot is not None:
                 robot.close()
                 print("Motoren 0, E-Stop terug actief.")
+            if view is not None:
+                view.finish()
+                time.sleep(0.3)  # laatste gegevens nog naar de browser sturen
         finally:
             if f is not None:
                 f.close()
@@ -426,8 +440,10 @@ def add_drive_args(ap, distance):
     ap.add_argument("--ramp", type=float, default=1.5, help="seconden om van 0 naar het volle vermogen te gaan")
     ap.add_argument("--creep", type=int, default=60, help="kruipvermogen vlak voor het doel")
     ap.add_argument("--tolerance", type=float, default=3.0, help="toegelaten stopfout in mm (min. ±1 encoderpuls ca. 2,8 mm)")
-    ap.add_argument("--ip", default=ROBOT_IP)
+    ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
     ap.add_argument("--port", type=int, default=ROBOT_PORT)
+    ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True, help="live weergave in de browser (standaard aan)")
+    ap.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="live naar MQTT/Grafana sturen (zie grafana/README.md)")
 
 
 def run_segment(robot, args, power):
@@ -449,7 +465,7 @@ def main():
     args = ap.parse_args()
     if not -1000 <= args.power <= 1000:
         ap.error("--power moet tussen -1000 en 1000 liggen")
-    with robot_session(args.csv, "_heen_terug", args.ip, args.port) as robot:
+    with robot_session(args.csv, "_heen_terug", args.ip, args.port, args.live, args.mqtt) as robot:
         prepare(robot, args.rest)
         robot.phase = "heen"
         run_segment(robot, args, args.power)
