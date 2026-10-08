@@ -10,23 +10,29 @@ Aannames (Jaguar-handleiding + config OutDoorRobotConfig_4x4.xml):
   - wiel: 300 encoderpulsen per omwenteling, straal 0.135 m, spoorbreedte 0.52 m
   - kanaal 1 = linkerwielen (vooruit = pulsen omhoog), kanaal 2 = rechterwielen (vooruit = pulsen omlaag)
   - MM0 = voorste motordriver, MM1 = achterste
-  - hoogte = integraal van sin(pitch) over de encoderafstand, t.o.v. het vlak waarop de robot in rust stond
+  - hoogte = integraal van sin(pitch) over de afgelegde weg, t.o.v. het vlak waarop de robot in rust stond
+  - afgelegde weg = slipbewuste odometrie (odometrie.py): vier wielen apart, getoetst aan gyro en
+    accelerometer; het gemiddelde van de vier wielen blijft ter vergelijking in de samenvatting
 """
 import csv
 import json
 import math
 import statistics as st
 import sys
+from collections import Counter
 from pathlib import Path
 
+import odometrie
+
 ACC_LSB_G = 256.0
-GYRO_LSB_DPS = 14.375
+GYRO_LSB_DPS = 14.375     # datasheet; test_sondewiel.py draai meet de echte schaal (gyro_schaal)
 WHEEL_CNT = 300
 WHEEL_R = 0.135           # nominaal; kalibreer.py schrijft de gemeten effectieve straal naar kalibratie.json
 WHEEL_DIS = 0.52
 CALIBRATION = Path(__file__).parent / "kalibratie.json"
-if CALIBRATION.exists():
-    WHEEL_R = json.loads(CALIBRATION.read_text(encoding="utf-8"))["wielstraal_m"]
+KALIBRATIE = json.loads(CALIBRATION.read_text(encoding="utf-8")) if CALIBRATION.exists() else {}
+WHEEL_R = KALIBRATIE.get("wielstraal_m", WHEEL_R)
+GYRO_LSB_DPS /= KALIBRATIE.get("gyro_schaal", 1.0)
 M_PER_CNT = 2 * math.pi * WHEEL_R / WHEEL_CNT
 SMOOTH_S = 0.5            # venster voor hellingshoeken (laagdoorlaat)
 VIB_WINDOW_S = 0.2        # venster voor trillings-RMS
@@ -42,6 +48,10 @@ SPIN_FRAC = 1.6           # snelheid > 160 % van normaal = wielen draaien vrij (
 SPIN_MIN_S = 0.6
 SIDE_FRAC = 0.6           # links en rechts verschillen meer dan 60 % = één kant blokkeert of slipt
 SIDE_MIN_S = 1.0
+HELD_FRAC = 0.75          # snelheid < 75 % van normaal …
+HELD_AMP_FACTOR = 3.0     # … met minstens 3× de normale motorstroom …
+HELD_MIN_A = 1.5          # … en minstens 1,5 A
+HELD_MIN_S = 0.3          # … gedurende 0,3 s = tegengehouden (bv. iemand houdt de robot vast)
 
 HERE = Path(__file__).parent
 TEMPLATE = HERE / "dashboard_template.html"
@@ -128,7 +138,8 @@ def analyse(path):
     if not imu or not any(s["fase"] in drive_phases for s in imu) or not any(s["fase"] == "rust" for s in imu) or any(len(v) < 2 for v in enc.values()):
         raise ValueError("Log mist IMU, rustfase, rijfase of encoders van beide drivers.")
     t_drive = next(s["t"] for s in imu if s["fase"] in drive_phases)
-    rest = [s for s in imu if s["fase"] == "rust"]
+    # Zoals het rijscript: biases uit de laatste ≈ 3 s rust (vroeger kan iemand de robot nog neerzetten).
+    rest = [s for s in imu if s["fase"] == "rust"][-150:]
     bias = [st.mean(s["g"][i] for s in rest) for i in range(3)]
     acc_rest = [st.mean(s["a"][i] for s in rest) for i in range(3)]
 
@@ -175,13 +186,24 @@ def analyse(path):
     pitch = moving_avg([math.degrees(math.atan2(a, c)) for a, c in zip(ax, az)], n_smooth)
     roll = moving_avg([math.degrees(math.atan2(b, c)) for b, c in zip(ay, az)], n_smooth)
 
+    # Slipbewuste afgelegde weg (zelfde code als live in het rijscript), op nul gezet aan het einde
+    # van de rustfase; per IMU-sample in dezelfde volgorde als `imu`.
+    odo, reeks = odometrie.herspeel(imu, enc, bias, acc_rest, rest[-1]["t"], M_PER_CNT, GYRO_LSB_DPS, ACC_LSB_G, WHEEL_DIS)
+    s0 = next((r[1] for r in reversed(reeks) if r[0] <= t_drive), 0.0)
+    s_fus = [r[1] - s0 if t > 0 else 0.0 for r, t in zip(reeks, ts)]
+    v_fus = [r[2] for r in reeks]
+    reeks_t, reeks_s = [r[0] for r in reeks], [r[1] for r in reeks]
+    def s_abs(t):
+        return interp(reeks_t, reeks_s, t)
+    rijdend = [i for i, smp in enumerate(imu) if smp["fase"] in drive_phases]
+
     heading, x, y, s_at = [], [], [], []
     psi = px = py = 0.0
     prev_s = 0.0
     for i, t in enumerate(ts):
         if i and t > 0:
             psi += gz[i] * (t - max(ts[i - 1], 0))
-        s = interp([e - t_drive for e in et], dist, t) if t > 0 else 0.0
+        s = s_fus[i]
         ds = s - prev_s
         px += ds * math.cos(math.radians(psi))
         py += ds * math.sin(math.radians(psi))
@@ -295,8 +317,9 @@ def analyse(path):
             out[i] = out[i-1] + abs(vals[i] - vals[i-1])
         return out
     cumulative = travelled(dist)
-    total = cumulative[-1]
-    afstand = [interp(et, cumulative, t + t_drive) if t >= 0 else 0 for t in ts]
+    total = cumulative[-1]                              # gemiddelde van 4 wielen, ter vergelijking
+    a0 = next((r[7] for r in reversed(reeks) if r[0] <= t_drive), 0.0)
+    afstand = [r[7] - a0 if t >= 0 else 0.0 for r, t in zip(reeks, ts)]
 
     # Gebeurtenissen: periodes waarin een voorwaarde lang genoeg geldt.
     def runs(flags, min_s):
@@ -345,20 +368,54 @@ def analyse(path):
                       for d, a, b in zip(driving, vl, vr)], SIDE_MIN_S):
         side = "links" if abs(st.mean(vl[i:j + 1])) < abs(st.mean(vr[i:j + 1])) else "rechts"
         event("één kant", i, j, f"{ts[j] - ts[i]:.1f} s · {side} trager: links {st.mean(vl[i:j + 1]):.2f}, rechts {st.mean(vr[i:j + 1]):.2f} m/s")
+    # Tegengehouden: vermogen aan, robot duidelijk trager dan normaal en motorstroom veel hoger.
+    # Anders dan bij slip draaien de wielen even traag als de robot rijdt: de afstand klopt.
+    amp_rows = sorted((m[0] - t_drive, max(abs(a) for a in m[4]) / 10) for m in motor if m[3] == "A")
+    if amp_rows:
+        amp_t, amp_v = [r[0] for r in amp_rows], [r[1] for r in amp_rows]
+        normal = [a for t_, a in amp_rows if any(abs(t_ - q) <= 0.12 for q, _ in steady)]
+        amp_hi = max(HELD_MIN_A, HELD_AMP_FACTOR * (st.median(normal) if normal else 0.5))
+        amp_at = [interp(amp_t, amp_v, t) for t in ts]
+        odo_slip = [r[3] not in ("normaal", "stil") for r in reeks]
+        for i, j in runs([d and STALL_FRAC * e <= abs(v) < HELD_FRAC * e and a >= amp_hi
+                          for d, v, e, a in zip(driving, v_imu, expect, amp_at)], HELD_MIN_S):
+            k0 = max(0, i - 15)
+            grip = not any(odo_slip[k0:j + 15])
+            event("tegengehouden", i, j, f"{ts[j] - ts[i]:.1f} s · snelheid tot {min(abs(v) for v in v_imu[i:j + 1]):.2f} m/s (normaal {expect[i]:.2f}), "
+                  f"motorstroom tot {max(amp_at[i:j + 1]):.1f} A · " + ("wielen hielden grip: afstand klopt" if grip else "met slip"))
     for t, words in notes:
         if words[0] == "VAST":
             i = min(range(n), key=lambda k: abs(ts[k] - (t - t_drive)))
             event("afgebroken", i, i, f"rijscript stopte het segment '{words[1]}': geen voortgang")
+    for t0, t1, kind, detail, corr in odo.gebeurtenissen:
+        if t1 < t_drive or (kind == "slip" and abs(corr) < 0.02 and t1 - t0 < 0.6):
+            continue                                    # kleine slip bij optrekken: alleen in de cijfers
+        i = min(range(n), key=lambda k: abs(ts[k] - (t0 - t_drive)))
+        j = min(range(n), key=lambda k: abs(ts[k] - (t1 - t_drive)))
+        event({"lucht": "wielen draaien door", "onzeker": "afstand onzeker", "overbrugd": "IMU overbrugt"}.get(kind, kind), i, j, detail)
     events.sort(key=lambda e: e["t0"])
+
+    def wheels_at(t):
+        """Afstand (m) per wiel op tijdstip t: ((voor links, voor rechts), (achter links, achter rechts))."""
+        return tuple(tuple(interp([q[0] for q in rows], [q[k] for q in rows], t) for k in (1, 2)) for rows in (front, rear))
 
     doelen = {}
     for t, words in notes:
         if words[0] == "DOEL":
-            doelen[words[1]] = {"fase": words[1], "doel_m": float(words[2]), "gemeten_m": None, "fout_mm": None}
+            doelen[words[1]] = {"fase": words[1], "doel_m": float(words[2]), "gemeten_m": None, "fout_mm": None, "_t": t}
         elif words[0] == "STOP" and words[1] in doelen:
             d = doelen[words[1]]
             d["gemeten_m"] = float(words[2])
             d["fout_mm"] = rnd((d["gemeten_m"] - d["doel_m"]) * 1000, 1)
+            t0 = d.pop("_t")
+            d["slipbewust_m"] = rnd(s_abs(t) - s_abs(t0), 4)
+            d["slipbewust_fout_mm"] = rnd((d["slipbewust_m"] - d["doel_m"]) * 1000, 1)
+            (fl0, fr0), (rl0, rr0) = wheels_at(t0)
+            (fl1, fr1), (rl1, rr1) = wheels_at(t)
+            d["voorwielen_m"] = rnd((fl1 + fr1 - fl0 - fr0) / 2, 4)
+            d["achterwielen_m"] = rnd((rl1 + rr1 - rl0 - rr0) / 2, 4)
+            d["wielen4_m"] = rnd((d["voorwielen_m"] + d["achterwielen_m"]) / 2, 4)
+            d["t0"], d["t1"] = rnd(t0 - t_drive, 2), rnd(t - t_drive, 2)
     summary = {
         "rit": Path(path).stem,
         "rittype": "heen en terug" if any(s["fase"] == "terug" for s in imu) else "rechtdoor",
@@ -367,6 +424,11 @@ def analyse(path):
         "pitch_eind_deg": final_angle(pitch),
         "roll_eind_deg": final_angle(roll),
         "afstand_m": rnd(total, 2),
+        "afstand_slipbewust_m": rnd(afstand[-1], 2),
+        "verplaatsing_slipbewust_m": rnd(s_fus[-1], 2),
+        "afstand_gecorrigeerd_m": rnd(odo.gecorrigeerd, 2),
+        "afstand_onzekerheid_cm": rnd(odo.onzekerheid * 100, 1),
+        "odometrie_modi_pct": {k: rnd(100 * v / len(rijdend), 1) for k, v in Counter(reeks[i][3] for i in rijdend).items()} if rijdend else {},
         "afstand_links_m": rnd(travelled(left)[-1], 2),
         "afstand_rechts_m": rnd(travelled(right)[-1], 2),
         "snelheid_ms": rnd(st.mean(abs(v) for _, v in steady), 2),
@@ -415,6 +477,9 @@ def analyse(path):
         "pwr": [s["pwr"] for s in imu],
         "ax": [rnd(v, 3) for v in ax], "ay": [rnd(v, 3) for v in ay], "az": [rnd(v, 3) for v in az],
         "gz": [rnd(v, 2) for v in gz],
+        "v": [rnd(v, 3) for v in v_fus],
+        # odometrietoestand: 0 normaal/stil, 1 slip gecorrigeerd, 2 IMU overbrugt/onzeker, 3 wielen draaien door
+        "odo": [{"slip": 1, "overbrugd": 2, "onzeker": 2, "lucht": 3}.get(r[3], 0) for r in reeks],
         "pitch": [rnd(v, 3) for v in pitch], "roll": [rnd(v, 3) for v in roll],
         "heading": [rnd(v, 3) for v in heading],
         "pitch_f": [rnd(v - pitch0 - torque_tilt * m, 2) for v, m in zip(pitch_f, moving)],
