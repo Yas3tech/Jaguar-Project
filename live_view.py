@@ -14,6 +14,7 @@ Live berekeningen zijn een benadering van analyse_rit.py:
 """
 import json
 import math
+import socket
 import statistics as st
 import threading
 import time
@@ -237,14 +238,27 @@ def _handler(view):
     return Handler
 
 
-def start(name="", port=8765, open_browser=True):
-    """Start de webserver in de achtergrond en geef de LiveView terug."""
+def lan_addresses():
+    """IPv4-adressen van deze pc waarop andere apparaten hem kunnen bereiken (bv. op de DriJaguar-wifi)."""
+    try:
+        addrs = {a[4][0] for a in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+    except OSError:
+        addrs = set()
+    return sorted(a for a in addrs if not a.startswith(("127.", "169.254.")))
+
+
+def start(name="", port=8765, open_browser=True, network=True):
+    """Start de webserver in de achtergrond en geef de LiveView terug.
+    network=True: ook bereikbaar voor andere apparaten op hetzelfde netwerk (alleen lezen)."""
     view = LiveView(name)
-    server = ThreadingHTTPServer(("127.0.0.1", port), _handler(view))
+    server = ThreadingHTTPServer(("0.0.0.0" if network else "127.0.0.1", port), _handler(view))
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"
     print(f"Live weergave: {url}")
+    if network:
+        for ip in lan_addresses():
+            print(f"  meekijken vanaf een ander apparaat op hetzelfde netwerk: http://{ip}:{port}/")
     if open_browser:
         webbrowser.open(url)
     return view

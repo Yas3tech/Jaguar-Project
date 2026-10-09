@@ -74,7 +74,7 @@ class PID:
 class Jaguar:
     def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False, live=None):
         self.writer = writer
-        self.live = live      # live weergave (live_view): krijgt elke ontvangen regel
+        self.live = live      # live weergave (live_view / mqtt_stream): krijgt elke ontvangen regel
         self.t0 = time.perf_counter()
         self.phase = "rust"
         self.power = 0
@@ -416,7 +416,8 @@ class Jaguar:
 
 
 @contextmanager
-def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=True):
+def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=True, mqtt=False,
+                  mqtt_host="127.0.0.1", network=True):
     path = None
     f = None
     robot = None
@@ -430,9 +431,13 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
             f = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(f)
             writer.writerow(["t", "fase", "vermogen", "regel"])
+        name = path.stem if path else f"rit_{datetime.now():%Y%m%d_%H%M%S}_zonder_csv"
         if live:
             import live_view
-            view = live_view.start(path.stem if path else "zonder CSV")
+            view = live_view.start(name, network=network)
+        if mqtt:
+            from mqtt_stream import MqttStream
+            view = MqttStream(name, view, host=mqtt_host)   # rekent via dezelfde LiveView en publiceert naar MQTT/Grafana
         robot = Jaguar(ip, port, writer=writer, live=view)
         yield robot
     finally:
@@ -493,6 +498,11 @@ def add_drive_args(ap, distance):
     ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
     ap.add_argument("--port", type=int, default=ROBOT_PORT)
     ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True, help="live weergave in de browser (standaard aan)")
+    ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=True,
+                    help="live pagina ook bereikbaar voor andere apparaten op het netwerk (standaard aan)")
+    ap.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="live naar MQTT/Grafana sturen (zie grafana/README.md)")
+    ap.add_argument("--mqtt-host", default="127.0.0.1",
+                    help="pc waarop Grafana/Docker draait; bv. 192.168.0.104 als dat een andere laptop is")
 
 
 def run_segment(robot, args, power):
@@ -514,7 +524,8 @@ def main():
     args = ap.parse_args()
     if not -1000 <= args.power <= 1000:
         ap.error("--power moet tussen -1000 en 1000 liggen")
-    with robot_session(args.csv, "_heen_terug", args.ip, args.port, args.live) as robot:
+    with robot_session(args.csv, "_heen_terug", args.ip, args.port, args.live, args.mqtt,
+                       args.mqtt_host, args.network) as robot:
         prepare(robot, args.rest)
         robot.phase = "heen"
         run_segment(robot, args, args.power)

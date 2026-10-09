@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: InfluxDB
+    uid: jaguar-influx
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: jaguar
+      defaultBucket: ritten
+      timeInterval: 20ms
+    secureJsonData:
+      token: jaguar-lokaal-token

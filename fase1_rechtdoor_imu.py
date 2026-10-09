@@ -12,7 +12,8 @@ def main():
     args = ap.parse_args()
     if not -1000 <= args.power <= 1000:
         ap.error("--power moet tussen -1000 en 1000 liggen")
-    with robot_session(args.csv, ip=args.ip, port=args.port, live=args.live) as robot:
+    with robot_session(args.csv, ip=args.ip, port=args.port, live=args.live, mqtt=args.mqtt,
+                       mqtt_host=args.mqtt_host, network=args.network) as robot:
         prepare(robot, args.rest)
         robot.phase = "rijden"
         run_segment(robot, args, args.power)
