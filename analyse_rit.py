@@ -17,6 +17,7 @@ Aannames (Jaguar-handleiding + config OutDoorRobotConfig_4x4.xml):
 import csv
 import json
 import math
+import re
 import statistics as st
 import sys
 from collections import Counter
@@ -57,13 +58,23 @@ HERE = Path(__file__).parent
 TEMPLATE = HERE / "dashboard_template.html"
 
 
+def is_drive(fase):
+    """Rechtdoor rijden: heen/terug/rijden, of een parcoursstap zoals '1-vooruit' of '2-achteruit'."""
+    return fase in ("rijden", "heen", "terug") or re.fullmatch(r"\d+-(vooruit|achteruit)", fase) is not None
+
+
+def is_turn(fase):
+    """Ter plaatse draaien: parcoursstap zoals '3-draai'."""
+    return re.fullmatch(r"\d+-draai", fase) is not None
+
+
 def load(path):
     imu, enc, motor, notes = [], {"MM0": [], "MM1": []}, [], []
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
             t, fase, line = float(r["t"]), r["fase"], r["regel"]
             p = line.split(",")
-            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST"):   # eigen regels van het rijscript
+            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID"):   # eigen regels van het rijscript
                 notes.append((t, line.split()))
             elif p[0].startswith("#") and len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
                 try:
@@ -134,10 +145,12 @@ def rnd(v, d=3):
 
 def analyse(path):
     imu, enc, motor, notes = load(path)
-    drive_phases = {"rijden", "heen", "terug"}
-    if not imu or not any(s["fase"] in drive_phases for s in imu) or not any(s["fase"] == "rust" for s in imu) or any(len(v) < 2 for v in enc.values()):
+    fases = {s["fase"] for s in imu}
+    drive_phases = {f for f in fases if is_drive(f)}             # rechtdoor: snelheid volgt het vermogen
+    motion_phases = drive_phases | {f for f in fases if is_turn(f)}
+    if not imu or not drive_phases or not any(s["fase"] == "rust" for s in imu) or any(len(v) < 2 for v in enc.values()):
         raise ValueError("Log mist IMU, rustfase, rijfase of encoders van beide drivers.")
-    t_drive = next(s["t"] for s in imu if s["fase"] in drive_phases)
+    t_drive = next(s["t"] for s in imu if s["fase"] in motion_phases)
     # Zoals het rijscript: biases uit de laatste ≈ 3 s rust (vroeger kan iemand de robot nog neerzetten).
     rest = [s for s in imu if s["fase"] == "rust"][-150:]
     bias = [st.mean(s["g"][i] for s in rest) for i in range(3)]
@@ -163,7 +176,7 @@ def analyse(path):
             speed.append(((et[i] + et[i - 1]) / 2 - t_drive, (dist[i] - dist[i - 1]) / dt))
     v_max = max(abs(v) for _, v in speed)
     v_ref = st.median(abs(v) for _, v in speed if abs(v) > 0.05) if v_max > 0.05 else v_max
-    p_max = max(abs(s["pwr"]) for s in imu)
+    p_max = max(abs(s["pwr"]) for s in imu if s["fase"] in drive_phases)
     def sample_at(t):
         return min(imu, key=lambda s: abs(s["t"] - (t + t_drive)))
     steady = [(t, v) for t, v in speed if abs(v) > 0.85 * v_ref
@@ -195,7 +208,7 @@ def analyse(path):
     reeks_t, reeks_s = [r[0] for r in reeks], [r[1] for r in reeks]
     def s_abs(t):
         return interp(reeks_t, reeks_s, t)
-    rijdend = [i for i, smp in enumerate(imu) if smp["fase"] in drive_phases]
+    rijdend = [i for i, smp in enumerate(imu) if smp["fase"] in motion_phases]
 
     heading, x, y, s_at = [], [], [], []
     psi = px = py = 0.0
@@ -305,9 +318,9 @@ def analyse(path):
         v = [m[4][idx] for m in motor if m[3] == key and m[1] == fase]
         return v and [scale * x for x in v]
 
-    amps = [abs(a) / 10 for m in motor if m[3] == "A" and m[1] in drive_phases for a in m[4]]
+    amps = [abs(a) / 10 for m in motor if m[3] == "A" and m[1] in motion_phases for a in m[4]]
     batt_start = motor_vals("V", "rust", 1, 0.1)
-    batt_drive = [m[4][1] * 0.1 for m in motor if m[3] == "V" and m[1] in drive_phases]
+    batt_drive = [m[4][1] * 0.1 for m in motor if m[3] == "V" and m[1] in motion_phases]
     temps = [t for m in motor if m[3] == "T" for t in m[4]]
 
     start_e = max(0, next((i for i, t in enumerate(et) if t >= t_drive), 1) - 1)
@@ -416,9 +429,25 @@ def analyse(path):
             d["achterwielen_m"] = rnd((rl1 + rr1 - rl0 - rr0) / 2, 4)
             d["wielen4_m"] = rnd((d["voorwielen_m"] + d["achterwielen_m"]) / 2, 4)
             d["t0"], d["t1"] = rnd(t0 - t_drive, 2), rnd(t - t_drive, 2)
+    # Plan: de stappen in volgorde (rijden in m, draaien in graden, + = links), met wat er gemeten werd.
+    plan, open_steps = [], {}
+    for t, words in notes:
+        if words[0] in ("DOEL", "DRAAI") and len(words) > 2:
+            goal = float(words[2])
+            kind = "draai" if words[0] == "DRAAI" else ("vooruit" if goal >= 0 else "achteruit")
+            open_steps[words[1]] = {"fase": words[1], "soort": kind, "doel": goal, "t0": t}
+        elif words[0] in ("STOP", "GEDRAAID") and words[1] in open_steps:
+            step = open_steps.pop(words[1])
+            if step["soort"] == "draai":
+                step["gemeten"] = rnd(interp(ts, heading, t - t_drive) - interp(ts, heading, step["t0"] - t_drive), 2)
+                step["gemeten_live"] = float(words[2])
+            else:
+                step["gemeten"] = rnd(s_abs(t) - s_abs(step["t0"]), 4)
+            step["t0"], step["t1"] = rnd(step["t0"] - t_drive, 2), rnd(t - t_drive, 2)
+            plan.append(step)
     summary = {
         "rit": Path(path).stem,
-        "rittype": "heen en terug" if any(s["fase"] == "terug" for s in imu) else "rechtdoor",
+        "rittype": "parcours" if any(re.match(r"\d+-", f) for f in fases) else "heen en terug" if "terug" in fases else "rechtdoor",
         "verplaatsing_m": rnd(dist[-1], 2),
         "snelheid_max_ms": rnd(v_max, 2),
         "pitch_eind_deg": final_angle(pitch),
@@ -432,7 +461,7 @@ def analyse(path):
         "afstand_links_m": rnd(travelled(left)[-1], 2),
         "afstand_rechts_m": rnd(travelled(right)[-1], 2),
         "snelheid_ms": rnd(st.mean(abs(v) for _, v in steady), 2),
-        "rijtijd_s": rnd(sum(imu[i+1]["t"] - s["t"] for i, s in enumerate(imu[:-1]) if s["fase"] in drive_phases), 1),
+        "rijtijd_s": rnd(sum(imu[i+1]["t"] - s["t"] for i, s in enumerate(imu[:-1]) if s["fase"] in motion_phases), 1),
         "koersdrift_gyro_deg": rnd(heading[end], 2),
         "koersdrift_encoder_deg": rnd(enc_heading[-1], 2),
         "zijdelings_eind_cm": rnd(y[end] * 100, 1),
@@ -468,6 +497,7 @@ def analyse(path):
         "koppelkanteling_deg": rnd(torque_tilt, 2),
         "gebeurtenissen": events,
         "doelen": list(doelen.values()),
+        "plan": plan,
     }
     series = {
         "t": [rnd(t, 3) for t in ts],

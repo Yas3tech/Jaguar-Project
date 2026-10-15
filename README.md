@@ -17,6 +17,15 @@ python analyse_rit.py ritten/rit_20261002_100122.csv
 
 Grenzen van die precisie: één encoderpuls is 2,8 mm wielomtrek, en de encoders komen maar met ongeveer 5 Hz binnen. Als de robot bij vol vermogen 1,5 s nauwelijks vooruitgaat (vastgelopen, obstakel), breekt het script het segment af. Het stopt ook als de robot meer dan 35° kantelt t.o.v. de start, of als de wielen langer dan 1 s draaien zonder dat de robot rijdt (opgetild, op zijn neus, tegen een obstakel). Beweegt de robot tijdens de rustmeting, dan meet het script de rust opnieuw.
 
+Een parcours met meerdere stappen en draaien ter plaatse:
+
+```powershell
+python parcours.py vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
+python parcours.py v:2 l:90 v:2 l:90 v:2 l:90 v:2      # vierkant
+```
+
+Rechte stappen rijden zoals hierboven. Draaien gebeurt ter plaatse op de gyro: het vermogensverschil zakt met de resterende hoek, de robot stopt vroeger volgens zijn draaisnelheid (uitloop) en corrigeert met korte stoten tot op 1°. Komt hij niet in beweging, dan verhoogt hij het minimumvermogen stap voor stap. Na een draai volgt hij de nieuwe koers; opeenvolgende rechte stukken blijven op dezelfde lijn. Draaien is zo juist als de gyroschaal: kalibreer eerst met `python test_sondewiel.py draai`. Het dashboard toont de geplande route en de gereden route op ware schaal.
+
 Richting: `--distance -3` of `--power -250` rijdt achteruit. Bij heen/terug betekent een negatief vermogen of een negatieve afstand: eerst achteruit, dan terug vooruit.
 
 Rechtdoor houden met een PID-regelaar (cascade): tijdens de rustfase meet het script de gyrobias. Tijdens het rijden geeft de zijdelingse afwijking een gewenste koers (20° per meter, max. 5°, terug naar de startlijn). Een PID op de gyrokoers zet die om in een vermogensverschil tussen links en rechts:

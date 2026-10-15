@@ -222,7 +222,9 @@ class Odometrie:
             vr, slip_r = kant(w[1], w[3], v_pred + half)
             slip = [f"{wiel} {zijde}" for wiel, zijde in ((slip_l, "links"), (slip_r, "rechts")) if wiel]
             z = (vl + vr) / 2
-            if abs((vr - vl) - 2 * half) > tol + abs(half):
+            # Skid-steer: bij draaien slippen de wielen altijd zijwaarts, zodat links − rechts tot ≈ 2,5×
+            # groter is dan gyro × spoorbreedte. Alleen een groter verschil is een slippende kant.
+            if abs((vr - vl) - 2 * half) > tol + 2.5 * abs(half):
                 cl, cr = vl + half, vr - half            # midden volgens elke kant apart
                 if abs(cl - v_pred) <= abs(cr - v_pred):
                     z, slip = cl, slip + ["kant rechts"]
