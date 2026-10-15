@@ -46,6 +46,11 @@ STEER_FRAC = 0.3          # stuurcorrectie hoogstens 30 % van het rijvermogen
 JOG_STEER_FRAC = 0.6      # bij kruipstoten mag de zwakke kant meer extra krijgen, anders komt ze niet los
 MAX_KANTEL = 35.0         # graden t.o.v. de rusthoek: schuiner = stoppen (rit 134323 kantelde op zijn neus)
 ODO_ALARM_S = 1.0         # zo lang "onzeker" of "wielen in de lucht" tijdens het rijden = stoppen
+TURN_TOP = 380            # draaien ter plaatse: maximaal vermogensverschil …
+TURN_MIN = 220            # … en minimum om de wrijving van skid-steer te overwinnen (wordt bijgeleerd)
+TURN_K = 6.0              # vermogen per graad resterende hoek
+TURN_LEAD = 0.25          # s: uitloop na vermogen 0, voorspeld met de draaisnelheid
+TURN_TOL = 1.0            # graden
 REST_MAX_G = 0.03         # spreiding van de accelerometer in rust (normaal ≈ 0,012 g); meer = robot bewoog
 
 
@@ -110,6 +115,10 @@ class Jaguar:
         self._enc_new = set()
         self._alarm_since = None
         self._parse_error = False
+        # Te volgen rechte lijn: oorsprong (m) en koers (graden). Na een draai begint een nieuwe lijn.
+        self.target_heading = 0.0
+        self.line = (0.0, 0.0)
+        self.turn_min = TURN_MIN
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
         self.reader.start()
 
@@ -191,7 +200,12 @@ class Jaguar:
     # Koers en zijdelingse afwijking komen uit de odometrie.
     heading = property(lambda self: self.odo.koers)
     yaw_rate = property(lambda self: self.odo.draaisnelheid)
-    lateral = property(lambda self: self.odo.y)
+    @property
+    def lateral(self):
+        """Afstand (m) links (+) of rechts (−) van de te volgen lijn."""
+        h = math.radians(self.target_heading)
+        dx, dy = self.odo.x - self.line[0], self.odo.y - self.line[1]
+        return -dx * math.sin(h) + dy * math.cos(h)
 
     def zero_heading(self):
         """In rust: gyrobias en zwaartekracht uit de laatste ≈ 3 s; afstand, koers en zijdelingse afwijking op nul.
@@ -204,6 +218,7 @@ class Jaguar:
         acc = [sum(a[k] for _, a in rest) / len(rest) for k in range(3)]
         spread = math.sqrt(sum(sum((a[k] - acc[k]) ** 2 for _, a in rest) / len(rest) for k in range(3))) / ACC_LSB_G
         self.odo.nul(gyro, acc)
+        self.target_heading, self.line = 0.0, (0.0, 0.0)
         return spread < REST_MAX_G
 
     def _guard(self, p):
@@ -222,7 +237,7 @@ class Jaguar:
             self._alarm_since = None
 
     def _steer(self, p, frac=STEER_FRAC):
-        """Vermogensverschil om recht op de startlijn te blijven (cascade):
+        """Vermogensverschil om recht op de lijn te blijven (cascade):
         buiten: zijdelingse afwijking → gewenste koers; binnen: PID op de gyrokoers.
         Rechts sneller dan links draait altijd naar links, ook achteruit."""
         now = time.perf_counter()
@@ -236,8 +251,76 @@ class Jaguar:
             self._steer_dir = direction
         dt = min(0.2, now - self._steer_t) if self._steer_t else LOOP
         self._steer_t = now
-        target = max(-MAX_LINE_DEG, min(MAX_LINE_DEG, -K_LINE * self.lateral * direction))
+        target = self.target_heading + max(-MAX_LINE_DEG, min(MAX_LINE_DEG, -K_LINE * self.lateral * direction))
         return int(self.heading_pid.update(target, self.heading, self.yaw_rate, dt, frac * abs(p)))
+
+    def _spin(self, p):
+        """Ter plaatse draaien: p > 0 = naar links (linkerwielen achteruit, rechterwielen vooruit)."""
+        self._motor(0, int(p))
+        self.power = abs(int(p))          # de motoren draaien: niet als rust tellen, wel loggen
+
+    def _settle_turn(self, wait=1.5):
+        """Stilstaan tot de draaisnelheid onder 1°/s zakt."""
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < wait:
+            self._motor(0)
+            time.sleep(LOOP)
+            if time.perf_counter() - t0 > 0.3 and abs(self.yaw_rate) < 1.0:
+                break
+
+    def turn(self, angle, top=TURN_TOP):
+        """Ter plaatse `angle` graden draaien volgens de gyro (+ = links, − = rechts).
+        Vermogen zakt met de resterende hoek; stopt vroeger met de voorspelde uitloop en
+        corrigeert daarna met korte stoten tot binnen TURN_TOL. Geeft de gedraaide hoek terug."""
+        if not self.odo.klaar:
+            raise SystemExit("Draaien kan niet zonder gyro (geen IMU-data in de rustmeting).")
+        start, target = self.heading, self.target_heading + angle
+        self.note(f"DRAAI {self.phase} {angle:.2f}")
+        t0 = moved_at = time.perf_counter()
+        timeout = 8 + abs(angle) / 10
+        try:
+            while True:
+                now = time.perf_counter()
+                err = target - self.heading
+                ahead = err - self.yaw_rate * TURN_LEAD
+                if abs(ahead) <= TURN_TOL or ahead * err < 0:
+                    break
+                if now - t0 > timeout:
+                    raise Stalled(f"draai niet af na {timeout:.0f} s")
+                if self.odo.kanteling > MAX_KANTEL:
+                    raise Stalled(f"robot {self.odo.kanteling:.0f}° gekanteld t.o.v. de start")
+                p = max(self.turn_min, min(top, TURN_K * abs(err))) * min(1.0, 0.4 + (now - t0) / 0.5)
+                # Draait hij niet (wrijving te groot)? Minimum stap voor stap verhogen; blijft voor volgende draaien.
+                if abs(self.yaw_rate) > 3:
+                    moved_at = now
+                elif now - t0 > 0.8 and now - moved_at > 0.5:
+                    self.turn_min, moved_at = min(top, self.turn_min + 20), now
+                self._spin(math.copysign(p, err))
+                time.sleep(LOOP)
+            self._motor(0)
+            for _ in range(6):                               # nadraaien met korte stoten
+                self._settle_turn()
+                err = target - self.heading
+                if abs(err) <= 1.5 * TURN_TOL:
+                    break
+                pulse = min(0.4, max(0.08, abs(err) / 40))
+                t1 = time.perf_counter()
+                while time.perf_counter() - t1 < pulse:
+                    self._spin(math.copysign(self.turn_min, err))
+                    time.sleep(LOOP)
+                self._motor(0)
+        except Stalled as e:
+            self._motor(0)
+            print(f"{self.phase}: GESTOPT - {e}.")
+            self.note(f"VAST {self.phase}")
+        self._settle_turn()
+        turned = self.heading - start
+        self.note(f"GEDRAAID {self.phase} {turned:.2f}")
+        # Volgende rechte stukken volgen de gewenste koers vanaf hier.
+        self.target_heading, self.line = target, (self.odo.x, self.odo.y)
+        self.heading_pid.integral = 0.0
+        print(f"{self.phase}: doel {angle:+.1f}°, gedraaid {turned:+.1f}° volgens de gyro, fout {turned - angle:+.1f}°")
+        return turned
 
     def _motor(self, p, steer=0):
         """Vermogen `p` op beide kanten; `steer` > 0 maakt rechts sneller (draait naar links).
@@ -299,7 +382,7 @@ class Jaguar:
             print(f"{self.phase}: slip: {corr * 100:.1f} cm niet uit het gemiddelde van de 4 wielen, "
                   f"onzekerheid ± {unc * 100:.1f} cm")
         if self.odo.klaar:
-            print(f"{self.phase}: koers {self.heading:+.1f}°, naast de startlijn {self.lateral * 100:+.1f} cm (+ = links, schatting)")
+            print(f"{self.phase}: koers {self.heading:+.1f}°, naast de lijn {self.lateral * 100:+.1f} cm (+ = links, schatting)")
         return moved
 
     def _approach(self, goal, top, ramp, brake):
