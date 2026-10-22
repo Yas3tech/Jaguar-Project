@@ -14,7 +14,6 @@ import math
 
 from jaguar.kern.robot import add_drive_args, positive_seconds, prepare, robot_session
 
-EINDKOERS_TOL = 3.0   # graden: grotere koersfout na de laatste stap wordt ter plaatse rechtgezet
 MAX_CORRECTIE = 0.5   # m: grotere correctie voor de vorige stappen vertrouwen we niet (bv. haperende odometrie)
 STAPPEN = {"vooruit": "vooruit", "v": "vooruit", "achteruit": "achteruit", "a": "achteruit",
            "links": "links", "l": "links", "rechts": "rechts", "r": "rechts"}
@@ -75,9 +74,7 @@ def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=6
             robot.phase = f"{i}-draai"
             robot.turn(value if soort == "links" else -value, turn_power)
     # Eindkoers: bv. een kant die bij het kruipen vastzat en de robot liet zwenken (rit 122109: 20°).
-    if robot.odo.klaar and abs(robot.target_heading - robot.heading) > EINDKOERS_TOL:
-        robot.phase = "eindkoers"
-        robot.turn(0, turn_power, label="KOERS")
+    robot.eindkoers(turn_power)
     robot.phase = "uitbollen"
     robot.hold(2.0)
     x, y = robot.odo.x, robot.odo.y

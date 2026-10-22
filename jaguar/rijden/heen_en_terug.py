@@ -19,10 +19,12 @@ def main():
         prepare(robot, args.rest)
         robot.phase = "heen"
         run_segment(robot, args, args.power)
+        robot.eindkoers()
         robot.phase = "pauze"
         robot.hold(args.pause)
         robot.phase = "terug"
         run_segment(robot, args, -args.power)
+        robot.eindkoers()
         robot.phase = "uitbollen"
         robot.hold(2.0)
 

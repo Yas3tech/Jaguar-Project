@@ -66,6 +66,7 @@ TURN_MIN = 220            # … en minimum om de wrijving van skid-steer te over
 TURN_K = 6.0              # vermogen per graad resterende hoek
 TURN_LEAD = 0.25          # s: uitloop na vermogen 0, voorspeld met de draaisnelheid
 TURN_TOL = 1.0            # graden: einde van de vloeiende draai (met voorspelde uitloop)
+EINDKOERS_TOL = 1.0       # graden: grotere koersfout na een segment wordt ter plaatse rechtgezet
 TURN_FINE = 0.4           # graden: eindtolerantie na het nadraaien met korte stoten
 TURN_TRIES = 10
 TURN_MIN_PULSE = 0.04     # s: kortste draaistoot
@@ -398,6 +399,18 @@ class Jaguar:
         print(f"{self.phase}: doel {angle:+.1f}°, gedraaid {turned:+.1f}° volgens de gyro, fout {turned - angle:+.1f}°")
         self._check_ratio(turned, enc0)
         return turned
+
+    def eindkoers(self, turn_power=TURN_TOP, tol=EINDKOERS_TOL):
+        """Na een rechte stap: staat de koers meer dan `tol` graden naast de gewenste koers, dan ter plaatse rechtzetten.
+        Geeft True als er gedraaid is."""
+        if not self.odo.klaar or abs(self.target_heading - self.heading) <= tol:
+            return False
+        phase, self.phase = self.phase, "eindkoers"
+        try:
+            self.turn(0, turn_power, label="KOERS")
+        finally:
+            self.phase = phase
+        return True
 
     def _enc_heading(self):
         """Koers (graden) uit het verschil links/rechts van de vier wielen; skid-steer slipt, dus alleen een controle."""

@@ -17,6 +17,7 @@ def main():
         prepare(robot, args.rest)
         robot.phase = "rijden"
         run_segment(robot, args, args.power)
+        robot.eindkoers()
         robot.phase = "uitbollen"
         robot.hold(2.0)
 
