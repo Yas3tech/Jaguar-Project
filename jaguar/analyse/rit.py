@@ -60,7 +60,7 @@ TEMPLATE = ROOT / "dashboard" / "template.html"
 
 def is_drive(fase):
     """Rechtdoor rijden: heen/terug/rijden, of een parcoursstap zoals '1-vooruit' of '2-achteruit'."""
-    return fase in ("rijden", "heen", "terug") or re.fullmatch(r"\d+-(vooruit|achteruit)", fase) is not None
+    return fase in ("rijden", "heen", "terug") or re.fullmatch(r"\d+-(vooruit|achteruit|boog)", fase) is not None
 
 
 def is_turn(fase):

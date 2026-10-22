@@ -61,11 +61,23 @@ def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=6
     (rit 122109: 25 cm aan het einde na 15 stappen). Draaien gaat al naar de geplande absolute koers.
     Alles volgens de odometrie: wat die niet ziet (slip zonder signaal, gyroschaal) blijft staan."""
     px, py = robot.odo.x, robot.odo.y                 # gepland hoekpunt
-    for i, (soort, value) in enumerate(stappen, 1):
+    for i, stap_ in enumerate(stappen, 1):
+        soort, value = stap_[0], stap_[1]
         if i > 1:
             robot.phase = "pauze"
             robot.hold(pause)
-        if soort in ("vooruit", "achteruit"):
+        if soort == "boog":                               # ("boog", radius m, hoek graden, + = links)
+            robot.phase = f"{i}-boog"
+            h = math.radians(robot.target_heading)
+            r, a = float(value), float(stap_[2])
+            s_, c_ = math.sin(math.radians(abs(a))), 1 - math.cos(math.radians(abs(a)))
+            kant = 1 if a > 0 else -1
+            dx, dy = r * s_, kant * r * c_                # eindpunt van de boog in het stelsel van de beginkoers
+            px, py = px + dx * math.cos(h) - dy * math.sin(h), py + dx * math.sin(h) + dy * math.cos(h)
+            robot.note(f"PLAN {robot.phase} {r:.4f} {a:.2f}")
+            robot.arc(r, a, power, ramp)
+            robot.eindkoers(turn_power)
+        elif soort in ("vooruit", "achteruit"):
             robot.phase = f"{i}-{soort}"
             planned = value if soort == "vooruit" else -value
             robot.note(f"PLAN {robot.phase} {planned:.4f}")

@@ -20,6 +20,7 @@ from jaguar.rijden.parcours import STAPPEN, rijd
 MAX_STAPPEN = 40         # wat de gebruiker opgeeft; een boog telt als één stap
 MAX_UITGEROLD = 400      # na het uitrollen van bogen in korte stukjes
 MAX_RADIUS = 30.0
+MIN_RADIUS_VLOEIEND = 0.5
 MAX_METER = 20.0      # per stap; langer is eerder een tikfout
 MAX_GRADEN = 720.0
 MAX_POWER = 600       # bovengrens vanaf de pagina (≈ 1,9 m/s); hoger kan alleen met parcours.py
@@ -51,7 +52,7 @@ class Control:
             self.state = {"bezig": True, "resultaat": None, "fout": None}
             self.thread = threading.Thread(target=self._run, args=(view, stappen, power), daemon=True)
             self.thread.start()
-        print("Rit vanaf de pagina: " + ", ".join(f"{s} {v:g}" for s, v in stappen) + f" (vermogen {power})")
+        print("Rit vanaf de pagina: " + ", ".join(" ".join(f"{w:g}" if not isinstance(w, str) else w for w in st) for st in stappen) + f" (vermogen {power})")
         return 200, {"ok": True}
 
     @staticmethod
@@ -60,6 +61,7 @@ class Control:
             raise ValueError("Geen stappen.")
         if len(raw["stappen"]) > MAX_STAPPEN:
             raise ValueError(f"Hoogstens {MAX_STAPPEN} stappen.")
+        vloeiend = raw.get("bogen") == "vloeiend"       # anders: bogen als korte stukjes van 10°
         stappen = []
         for item in raw["stappen"]:
             getal = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
@@ -67,7 +69,12 @@ class Control:
                 radius, hoek = float(item[1]), float(item[2])      # hoek: + = naar links
                 if not 0.1 <= radius <= MAX_RADIUS or not 0 < abs(hoek) <= MAX_GRADEN:
                     raise ValueError(f"boog {radius:g} m, {hoek:g}°: radius 0,1 tot {MAX_RADIUS:g} m, hoek tot {MAX_GRADEN:g}°.")
-                stappen.extend(boog_naar_stappen(radius, hoek))
+                if vloeiend:
+                    if radius < MIN_RADIUS_VLOEIEND:
+                        raise ValueError(f"vloeiende boog: radius minstens {MIN_RADIUS_VLOEIEND:g} m (kleiner kan niet zonder dat de wielen achteruit moeten).")
+                    stappen.append(("boog", radius, hoek))
+                else:
+                    stappen.extend(boog_naar_stappen(radius, hoek))
                 continue
             if not (isinstance(item, list) and len(item) == 2 and item[0] in STAPPEN and getal(item[1])):
                 raise ValueError(f"Ongeldige stap: {item!r}")

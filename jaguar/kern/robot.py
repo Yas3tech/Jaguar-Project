@@ -49,6 +49,12 @@ DRIVER_STUUR_KI = 0.4     # deel van de koersfout dat per stap (5 Hz) wordt wegg
 DRIVER_STUUR_RATIO = 2.5  # pulsverschil per graad t.o.v. de wielgeometrie, zolang er nog geen draai gemeten is
 DRIVER_STUUR_MAX = 60     # pulsen: zoveel mogen de doelen links en rechts uit elkaar worden geschoven
 DRIVER_KOERS_OK = 0.3     # graden: binnen deze koersfout stuurt hij niet meer bij
+ARC_POWER = 220           # maximaal vermogen in een boog: lager = minder slip
+ARC_BRAKE = 0.3           # m/s²: remmen vlak voor het eind van de boog
+ARC_STEER_MAX = 0.9       # deel van het rijvermogen dat het vermogensverschil links/rechts mag zijn (de binnenste kant staat dan bijna stil)
+ARC_KOERS_FRAC = 0.35     # deel van het vermogen dat de koersregeling (PID) extra mag bijsturen bovenop de voorspelde stuurwaarde
+ARC_LEAD = 0.3            # s: de boog stopt zoveel vroeger als het robot nog uitrolt (snelheid × tijd), net als bij draaien
+ARC_MIN_RADIUS = 0.5      # m: kleiner kan niet zonder dat de binnenste wielen achteruit moeten
 DRIVER_FABRIEK = {"KP": 30, "KI": 10, "KD": 0, "MXPF": 100, "MXPR": 100, "MMOD": 0}
 STALL_S = 1.5             # zo lang < 15 % van de verwachte snelheid bij vol vermogen = vastgelopen
 IMU_HZ = 50.0
@@ -646,6 +652,68 @@ class Jaguar:
         if self.odo.klaar:
             print(f"{self.phase}: koers {self.heading:+.1f}°, naast de lijn {self.lateral * 100:+.1f} cm (+ = links, schatting)")
         return moved
+
+    def arc(self, radius, angle, power=ARC_POWER, ramp=1.5):
+        """Een boog van `radius` m en `angle` graden (+ = naar links) in één beweging rijden, zonder te stoppen.
+        De doelkoers draait mee met de afgelegde afstand: koers = start + hoek × afstand / booglengte. Het vermogensverschil
+        links/rechts bestaat uit een voorspelling voor deze straal (de buitenste kant rijdt sneller: verschil = v × spoor / R, met
+        de effectieve spoorbreedte uit de gemeten verhouding encoders/gyro) plus een PID op de gyrokoers die de rest bijstuurt.
+        De afstand komt uit de slipbewuste odometrie. Geeft de gedraaide hoek terug."""
+        if not self.odo.klaar:
+            raise SystemExit("Een boog rijden kan niet zonder gyro (geen IMU-data in de rustmeting).")
+        radius = max(ARC_MIN_RADIUS, float(radius))
+        top = min(abs(int(power)), ARC_POWER)
+        length = radius * math.radians(abs(angle))
+        side = 1 if angle > 0 else -1
+        start_heading, start_s = self.target_heading, self.odo.positie()
+        spoor = WHEEL_DIS * min(5.0, max(1.0, self.turn_ratio or DRIVER_STUUR_RATIO))
+        ff = side * spoor / (2 * radius)                       # stuurwaarde per eenheid rijvermogen
+        ff = max(-ARC_STEER_MAX, min(ARC_STEER_MAX, ff))
+        self.note(f"BOOG {self.phase} {radius:.3f} {angle:.2f}")
+        self.heading_pid.integral = 0.0
+        t0 = last = time.perf_counter()
+        moved_at, moved_s = t0, 0.0
+        p = 0
+        timeout = 15 + length / 0.05
+        try:
+            while True:
+                now = time.perf_counter()
+                if now - t0 > timeout:
+                    raise Stalled(f"boog niet af na {timeout:.0f} s")
+                dist = abs(self.odo.positie() - start_s)
+                if dist + abs(self.odo.v) * ARC_LEAD >= length:
+                    break
+                if abs(dist - moved_s) >= M_PER_CNT:
+                    moved_at, moved_s = now, dist
+                frac = dist / length
+                target = start_heading + angle * frac
+                remaining = length - dist
+                p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
+                p_brake = max(self.creep if hasattr(self, "creep") else 60, math.sqrt(2 * ARC_BRAKE * remaining) / self.k_v)
+                p = int(min(top, p_ramp, p_brake))
+                if p >= 0.9 * top and now - t0 > 2.0 and now - moved_at > STALL_S:
+                    raise Stalled(f"{abs(self.odo.v):.2f} m/s bij vermogen {p} in de boog")
+                dt = min(0.2, now - last)
+                last = now
+                pid = self.heading_pid.update(target, self.heading, self.yaw_rate, dt, ARC_KOERS_FRAC * p)
+                steer = int(ff * p + pid)
+                steer = max(-int(ARC_STEER_MAX * p), min(int(ARC_STEER_MAX * p), steer))
+                self._guard(p)
+                self._motor(p, steer)
+                time.sleep(LOOP)
+        except Stalled as e:
+            self._motor(0)
+            print(f"{self.phase}: boog afgebroken - {e}.")
+            self.note(f"VAST {self.phase}")
+        self._motor(0)
+        self._settled()
+        gedraaid = self.heading - (start_heading + 0.0)
+        self.target_heading = start_heading + angle
+        self.line = (self.odo.x, self.odo.y)
+        self.heading_pid.integral = 0.0
+        self.note(f"BOOGKLAAR {self.phase} {gedraaid:.2f}")
+        print(f"{self.phase}: boog {radius:.2f} m, doel {angle:+.1f}°, gedraaid {gedraaid:+.1f}° volgens de gyro, fout {gedraaid - angle:+.1f}°")
+        return gedraaid
 
     def _drive_with_driver(self, goal, sign, power, ramp, brake, tolerance):
         """Tot DRIVER_MARGIN voor het doel rijdt dit programma met de gyro; het laatste stuk regelt de driver."""

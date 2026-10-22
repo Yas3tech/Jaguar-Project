@@ -233,6 +233,7 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
         <h3>Rijden</h3>
         <div class="veld"><label for="i-pw">Vermogen (50 tot 600)</label><input id="i-pw" type="number" min="50" max="600" step="10" style="width:90px"></div>
         <p class="melding" id="pw-msg"></p>
+        <div class="veld"><label>Bogen rijden</label><div class="seg" role="group" aria-label="Hoe het robot een boog rijdt"><button id="g-stuk" aria-pressed="true">In stukjes</button><button id="g-vloeiend" aria-pressed="false">Vloeiend (nieuw)</button></div></div>
         <label class="vink"><input type="checkbox" id="c-breed" checked> Breedte van het robot tonen</label>
       </section>
       <section>
@@ -275,7 +276,7 @@ const ang = (a) => { a = ((a + 180) % 360 + 360) % 360 - 180; return a === -180 
 const KEY = "jaguar-ontwerp-v2", LIJST = "jaguar-routes-v2";
 
 /* ------------------------------------------------------------------ staat */
-const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true,
+const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true, bogen: "stukjes",
   view: { cx: 0, cy: 0, ppm: 70 }, kaart: { lat: 50.8418, lon: 4.3230, laag: "osm" } });
 let S = fresh();
 try { const o = JSON.parse(localStorage.getItem(KEY)); if (o && Array.isArray(o.pts) && o.pts.length) S = Object.assign(fresh(), o, { view: Object.assign(fresh().view, o.view), kaart: Object.assign(fresh().kaart, o.kaart) }); } catch {}
@@ -329,6 +330,7 @@ function plan(pts = S.pts, b0 = S.b0, power = S.power) {
       const nx = -Math.sin(leg[j].phi * RAD) * sign, ny = Math.cos(leg[j].phi * RAD) * sign;   // naar het midden
       const cx = x + nx * r, cy = y + ny * r, a0 = Math.atan2(y - cy, x - cx);
       const len = r * Math.abs(a) * RAD;
+      if (S.bogen === "vloeiend" && r < 0.5) out.fouten.push(`Boog bij punt ${j + 1}: radius ${nl(r)} m is te klein voor een vloeiende boog (minstens 0,5 m).`);
       out.stappen.push(["boog", +r.toFixed(3), +a.toFixed(2)]); out.bogen++; out.lengte += len;
       out.acties.push({ k: "boog", cx, cy, r, a0, a, h0: leg[j].phi, len, label: `Boog ${nl(r)} m, ${nl(Math.abs(a), 0)}° ${a > 0 ? "links" : "rechts"}` });
       const ex = cx + r * Math.cos(a0 + a * RAD), ey = cy + r * Math.sin(a0 + a * RAD);
@@ -355,6 +357,8 @@ function plan(pts = S.pts, b0 = S.b0, power = S.power) {
     first = false;
     if (ac.k === "draai") { const d = Math.abs(ac.naar - ac.van) / SPIN + 1.2; add(d, ac, (u) => ({ x: ac.x, y: ac.y, h: ac.van + (ac.naar - ac.van) * u })); prevH = ac.naar; }
     else if (ac.k === "lijn") { const d = ac.len / v + 2.0; add(d, ac, (u) => ({ x: ac.a.x + (ac.b.x - ac.a.x) * u, y: ac.a.y + (ac.b.y - ac.a.y) * u, h: ac.h })); }
+    else if (S.bogen === "vloeiend") { const vb = Math.max(0.05, K_V * Math.min(power, 220)), d = ac.len / vb + 4.0;
+      add(d, ac, (u) => { const th = ac.a0 + ac.a * RAD * u; return { x: ac.cx + ac.r * Math.cos(th), y: ac.cy + ac.r * Math.sin(th), h: ac.h0 + ac.a * u }; }); }
     else { const n = Math.max(1, Math.ceil(Math.abs(ac.a) / 10)); const d = n * cyc(2 * ac.r * Math.sin(Math.abs(ac.a) / n * RAD / 2), true);
       add(d, ac, (u) => { const th = ac.a0 + ac.a * RAD * u; return { x: ac.cx + ac.r * Math.cos(th), y: ac.cy + ac.r * Math.sin(th), h: ac.h0 + ac.a * u }; }); }
   }
@@ -507,6 +511,7 @@ function toon() {
   $("l-osm").setAttribute("aria-pressed", S.kaart.laag === "osm"); $("l-sat").setAttribute("aria-pressed", S.kaart.laag === "sat");
   for (const b of document.querySelectorAll("[data-b0]")) b.setAttribute("aria-pressed", +b.dataset.b0 === Math.round(S.b0));
   $("c-breed").checked = S.breed; $("i-pw").value = S.power;
+  $("g-stuk").setAttribute("aria-pressed", S.bogen !== "vloeiend"); $("g-vloeiend").setAttribute("aria-pressed", S.bogen === "vloeiend");
   $("hulp").hidden = S.pts.length > 2;
   resize(); sync(true);
 }
@@ -518,7 +523,7 @@ function sync(fit = false) {
   $("st-draai").textContent = P.stappen.length ? `${P.draaien} · ${P.bogen}` : "–";
   const msg = $("plan-msg"); msg.className = "melding";
   if (P.fouten.length) { msg.classList.add("bad"); msg.textContent = P.fouten[0]; }
-  else if (P.bogen) { msg.classList.add("warn"); msg.textContent = "Een boog rijdt het robot nu als korte stukjes van 10° (stap voor stap); vloeiende bogen komen later. Dat duurt langer dan in de simulatie lijkt."; }
+  else if (P.bogen) { msg.classList.add("warn"); msg.textContent = S.bogen === "vloeiend" ? "Vloeiende bogen zijn nieuw en nog niet op het robot getest: houd de noodstop bij de hand en begin met een ruime boog (radius vanaf 1 m)." : "Bogen worden als korte stukjes van 10° gereden (stap voor stap): veilig maar langzamer dan de simulatie toont."; }
   else msg.textContent = P.stappen.length ? "" : "Nog geen route.";
   stukken(); commando();
   $("b-start").disabled = !P.stappen.length || P.fouten.length > 0;
@@ -557,7 +562,7 @@ function stukken() {
   }
 }
 function commando() {
-  const ex = []; for (const s of P.stappen) { if (s[0] === "boog") { ex.push(...boogStappen(s[1], s[2])); } else ex.push(s); }
+  const ex = []; for (const s of P.stappen) { if (s[0] === "boog") { ex.push(...boogStappen(s[1], s[2])); } else ex.push(s); }   // parcours.py kent geen boog: stukjes
   const k = { vooruit: "v", achteruit: "a", links: "l", rechts: "r" };
   let c = "python -m jaguar.rijden.parcours " + ex.map(([s, w]) => `${k[s]}:${+w.toFixed(3)}`).join(" ") + ` --power ${S.power}`;
   if (S.modus === "buiten" && S.pts.length > 1) c = "python -m jaguar.rijden.gps_route " + S.pts.map((p) => naarLL(p.x, p.y).map((v) => v.toFixed(7)).join(",")).join(" ") + ` --richting ${Math.round(S.b0)} --power ${S.power}`;
@@ -624,6 +629,7 @@ for (const b of document.querySelectorAll("[data-b0]")) b.onclick = () => { snap
 $("i-b0").onchange = () => { snapshot(); S.b0 = ((parseFloat($("i-b0").value) || 0) % 360 + 360) % 360; toon(); };
 $("i-pw").onchange = () => { S.power = Math.max(50, Math.min(MAX_POWER, Math.round(+$("i-pw").value || 250))); $("i-pw").value = S.power; sync(); };
 $("c-breed").onchange = () => { S.breed = $("c-breed").checked; sync(); };
+for (const [id, w] of [["g-stuk", "stukjes"], ["g-vloeiend", "vloeiend"]]) $(id).onclick = () => { S.bogen = w; toon(); };
 for (const [id, laag] of [["l-osm", "osm"], ["l-sat", "sat"]]) $(id).onclick = () => { S.kaart.laag = laag; toon(); };
 $("i-lat").onchange = () => { S.kaart.lat = Math.max(-85, Math.min(85, parseFloat($("i-lat").value) || S.kaart.lat)); sync(true); dirty = true; };
 $("i-lon").onchange = () => { S.kaart.lon = Math.max(-180, Math.min(180, parseFloat($("i-lon").value) || S.kaart.lon)); sync(true); dirty = true; };
@@ -653,7 +659,7 @@ $("ds-nee").onclick = () => $("dlg-start").close();
 $("ds-ja").onclick = async () => {
   $("ds-ja").disabled = true; $("ds-fout").textContent = "starten…";
   try {
-    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stappen: P.stappen, power: S.power }) });
+    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stappen: P.stappen, power: S.power, bogen: S.bogen }) });
     const a = await r.json(); if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
     $("dlg-start").close(); parent.postMessage({ type: "rit-gestart" }, "*"); melding("rit gestart");
   } catch (e) { $("ds-fout").textContent = e instanceof TypeError ? "Geen verbinding met bediening.py (start: python -m jaguar.rijden.bediening)." : e.message; $("ds-ja").disabled = false; }
