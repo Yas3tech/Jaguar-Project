@@ -74,7 +74,7 @@ def load(path):
         for r in csv.DictReader(f):
             t, fase, line = float(r["t"]), r["fase"], r["regel"]
             p = line.split(",")
-            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID"):   # eigen regels van het rijscript
+            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID", "PLAN", "KOERS", "OMWEG", "OBSTAKEL", "MELDING"):   # eigen regels van het rijscript
                 notes.append((t, line.split()))
             elif p[0].startswith("#") and len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
                 try:
@@ -430,12 +430,23 @@ def analyse(path):
             d["wielen4_m"] = rnd((d["voorwielen_m"] + d["achterwielen_m"]) / 2, 4)
             d["t0"], d["t1"] = rnd(t0 - t_drive, 2), rnd(t - t_drive, 2)
     # Plan: de stappen in volgorde (rijden in m, draaien in graden, + = links), met wat er gemeten werd.
-    plan, open_steps = [], {}
+    # parcours.py rijdt naar de geplande hoekpunten: DOEL is dan de te rijden afstand (met de correctie
+    # voor de vorige stappen), PLAN de geplande. Het plan en de kaart gebruiken de geplande afstand.
+    # Een omweg rond een obstakel (fase "3-vooruit-omweg") hoort niet bij het plan; de stap zelf kan
+    # dan in delen gereden zijn (DOEL … STOP voor en na de omweg): die tellen samen als één stap.
+    plan, open_steps, planned, done = [], {}, {}, {}
     for t, words in notes:
-        if words[0] in ("DOEL", "DRAAI") and len(words) > 2:
+        if len(words) > 1 and "omweg" in words[1]:
+            continue
+        if words[0] == "PLAN" and len(words) > 2:
+            planned[words[1]] = float(words[2])
+        elif words[0] in ("DOEL", "DRAAI") and len(words) > 2:
             goal = float(words[2])
             kind = "draai" if words[0] == "DRAAI" else ("vooruit" if goal >= 0 else "achteruit")
             open_steps[words[1]] = {"fase": words[1], "soort": kind, "doel": goal, "t0": t}
+            if words[0] == "DOEL" and words[1] in planned:
+                open_steps[words[1]].update(doel=planned[words[1]], te_rijden=goal,
+                                            soort="vooruit" if planned[words[1]] >= 0 else "achteruit")
         elif words[0] in ("STOP", "GEDRAAID") and words[1] in open_steps:
             step = open_steps.pop(words[1])
             if step["soort"] == "draai":
@@ -444,6 +455,12 @@ def analyse(path):
             else:
                 step["gemeten"] = rnd(s_abs(t) - s_abs(step["t0"]), 4)
             step["t0"], step["t1"] = rnd(step["t0"] - t_drive, 2), rnd(t - t_drive, 2)
+            if step["fase"] in done:                      # vervolg na een omweg
+                prev = done[step["fase"]]
+                prev["gemeten"] = rnd(prev["gemeten"] + step["gemeten"], 4)
+                prev["t1"] = step["t1"]
+                continue
+            done[step["fase"]] = step
             plan.append(step)
     summary = {
         "rit": Path(path).stem,
@@ -535,18 +552,25 @@ def write_dashboard(analysis_dir, selected_rit):
     return out_html
 
 
+def run(path):
+    """Analyse van één CSV: schrijft <rit>_analyse.json en dashboard.html (met deze rit geselecteerd)."""
+    path = Path(path)
+    result = analyse(path)
+    out_json = path.with_name(path.stem + "_analyse.json")
+    out_json.write_text(json.dumps(result, separators=(",", ":")), encoding="utf-8")
+    out_html = write_dashboard(path.parent, result["summary"]["rit"]) if TEMPLATE.exists() else None
+    return result, out_html
+
+
 def main():
     paths = list((HERE / "ritten").glob("rit_*.csv"))
     if len(sys.argv) <= 1 and not paths:
         raise SystemExit("Geen rit-CSV gevonden.")
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else max(paths, key=lambda p: p.stat().st_mtime)
-    result = analyse(path)
-    out_json = path.with_name(path.stem + "_analyse.json")
-    out_json.write_text(json.dumps(result, separators=(",", ":")), encoding="utf-8")
+    result, out_html = run(path)
     for k, v in result["summary"].items():
         print(f"{k:26} {v}")
-    if TEMPLATE.exists():
-        out_html = write_dashboard(path.parent, result["summary"]["rit"])
+    if out_html:
         print(f"Dashboard: {out_html}")
 
 

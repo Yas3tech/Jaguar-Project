@@ -58,6 +58,10 @@ class Stalled(RuntimeError):
     pass
 
 
+class Aborted(RuntimeError):
+    """STOP op de live pagina (bediening.py): motoren 0, rit afgebroken."""
+
+
 class PID:
     """PID-regelaar.
     - D-term op de meting (bv. de gyrosnelheid) i.p.v. op de fout: geen stoot als het setpoint verspringt.
@@ -77,12 +81,12 @@ class PID:
 
 
 class Jaguar:
-    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False, live=None):
+    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False):
         self.writer = writer
-        self.live = live      # live weergave (live_view / mqtt_stream): krijgt elke ontvangen regel
         self.t0 = time.perf_counter()
         self.phase = "rust"
         self.power = 0
+        self.stop_requested = False   # True = elk volgend motorcommando wordt 0 en de rit breekt af
         self.sock = socket.create_connection((ip, port), timeout=3)
         self.sock.settimeout(0.5)
         self.lock = threading.Lock()
@@ -157,8 +161,6 @@ class Jaguar:
 
     def _parse(self, line):
         self.note(line)
-        if self.live is not None:
-            self.live.feed(time.perf_counter() - self.t0, self.phase, self.power, line)
         if line.startswith("#"):
             p = line.split(",")
             if len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
@@ -196,6 +198,14 @@ class Jaguar:
         self._clock += steps / IMU_HZ
         self._imu_since_enc = True
         self.odo.imu(self._clock, steps / IMU_HZ, gyro, acc)
+
+    def melding(self, text):
+        """Bericht voor de terminal, de CSV en de live pagina ."""
+        print(text)
+        self.note(f"MELDING {self.phase} {text}")
+        view = getattr(self.live, "view", self.live)     # MqttStream heeft de LiveView in .view
+        if view is not None and hasattr(view, "status"):
+            view.status["melding"] = text
 
     # Koers en zijdelingse afwijking komen uit de odometrie.
     heading = property(lambda self: self.odo.koers)
@@ -268,14 +278,15 @@ class Jaguar:
             if time.perf_counter() - t0 > 0.3 and abs(self.yaw_rate) < 1.0:
                 break
 
-    def turn(self, angle, top=TURN_TOP):
+    def turn(self, angle, top=TURN_TOP, label="DRAAI"):
         """Ter plaatse `angle` graden draaien volgens de gyro (+ = links, − = rechts).
         Vermogen zakt met de resterende hoek; stopt vroeger met de voorspelde uitloop en
-        corrigeert daarna met korte stoten tot binnen TURN_TOL. Geeft de gedraaide hoek terug."""
+        corrigeert daarna met korte stoten tot binnen TURN_TOL. Geeft de gedraaide hoek terug.
+        angle = 0 zet de koers terug op de gewenste koers; label="KOERS" telt dan niet als stap van het plan."""
         if not self.odo.klaar:
             raise SystemExit("Draaien kan niet zonder gyro (geen IMU-data in de rustmeting).")
         start, target = self.heading, self.target_heading + angle
-        self.note(f"DRAAI {self.phase} {angle:.2f}")
+        self.note(f"{label} {self.phase} {angle:.2f}")
         t0 = moved_at = time.perf_counter()
         timeout = 8 + abs(angle) / 10
         try:
@@ -325,6 +336,11 @@ class Jaguar:
     def _motor(self, p, steer=0):
         """Vermogen `p` op beide kanten; `steer` > 0 maakt rechts sneller (draait naar links).
         Kanaal 1 = links (vooruit omhoog), kanaal 2 = rechts (vooruit omlaag)."""
+        if self.stop_requested:   # alle rijlussen komen hier langs: STOP werkt in elke fase
+            self.power = 0
+            self.send("PING")
+            self.send("MMW !M 0 0")
+            raise Aborted("STOP op de live pagina")
         self.power = p
         left = max(-1000, min(1000, p - steer))
         right = max(-1000, min(1000, p + steer))
@@ -423,7 +439,7 @@ class Jaguar:
                     raise Stalled(f"{abs(v):.2f} m/s bij vermogen {p}")
             else:
                 slow_since = None
-            self._guard(p)
+            self._guard(direction * p)
             self._motor(direction * p, self._steer(direction * p))
             time.sleep(LOOP)
         self._motor(0)
@@ -500,41 +516,60 @@ class Jaguar:
 
 @contextmanager
 def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=True, mqtt=False,
-                  mqtt_host="127.0.0.1", network=True):
+                  mqtt_host="127.0.0.1", network=True, live_page=None):
+    """live_page: LiveView van een webserver die al draait (bediening.py); dan start hier geen
+    eigen server en wacht het script na de rit niet op Enter."""
     path = None
     f = None
     robot = None
     view = None
+    page = live_page  # live_view.LiveView achter de webpagina (voor de knop Analyse)
+    error = None
     try:
         writer = None
         if record:
             directory = Path(__file__).parent / "ritten"
             directory.mkdir(exist_ok=True)
             path = directory / f"rit_{datetime.now():%Y%m%d_%H%M%S_%f}{suffix}.csv"
+        name = path.stem if path else f"rit_{datetime.now():%Y%m%d_%H%M%S}_zonder_csv"
+        if live_page is not None:
+            view = live_page
+            view.name, view.csv_path = name, path
+        elif live:   # eerst de pagina: is de poort bezet, dan blijft er geen lege CSV achter
+            import live_view
+            view = page = live_view.start(name, network=network, csv_path=path)
+        if record:
             f = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(f)
             writer.writerow(["t", "fase", "vermogen", "regel"])
-        name = path.stem if path else f"rit_{datetime.now():%Y%m%d_%H%M%S}_zonder_csv"
-        if live:
-            import live_view
-            view = live_view.start(name, network=network)
         if mqtt:
             from mqtt_stream import MqttStream
             view = MqttStream(name, view, host=mqtt_host)   # rekent via dezelfde LiveView en publiceert naar MQTT/Grafana
         robot = Jaguar(ip, port, writer=writer, live=view)
         yield robot
+    except BaseException as e:
+        error = e
+        raise
     finally:
         try:
             if robot is not None:
                 robot.close()
                 print("Motoren 0, E-Stop terug actief.")
-            if view is not None:
-                view.finish()
-                time.sleep(0.3)  # laatste gegevens nog naar de browser sturen
         finally:
             if f is not None:
                 f.close()
                 print(f"Log: {path}")
+        if page is not None and path is not None:
+            page.csv_ready = True
+        if live_page is None and page is not None and path is not None and not isinstance(error, KeyboardInterrupt):
+            # De webserver stopt met het script: openhouden zodat de knop Analyse en het dashboard werken.
+            if error is not None:
+                print(f"Rit afgebroken: {error}")
+            print("Live pagina blijft open: klik op Analyse voor het dashboard. Enter (of Ctrl+C) = afsluiten.")
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                pass
 
 
 def prepare(robot, rest):
@@ -578,14 +613,8 @@ def add_drive_args(ap, distance):
     ap.add_argument("--ramp", type=float, default=1.5, help="seconden om van 0 naar het volle vermogen te gaan")
     ap.add_argument("--creep", type=int, default=60, help="kruipvermogen vlak voor het doel")
     ap.add_argument("--tolerance", type=float, default=3.0, help="toegelaten stopfout in mm (min. ±1 encoderpuls ca. 2,8 mm)")
-    ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
+    ap.add_argument("--ip", default=ROBOT_IP)
     ap.add_argument("--port", type=int, default=ROBOT_PORT)
-    ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True, help="live weergave in de browser (standaard aan)")
-    ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=True,
-                    help="live pagina ook bereikbaar voor andere apparaten op het netwerk (standaard aan)")
-    ap.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="live naar MQTT/Grafana sturen (zie grafana/README.md)")
-    ap.add_argument("--mqtt-host", default="127.0.0.1",
-                    help="pc waarop Grafana/Docker draait; bv. 192.168.0.104 als dat een andere laptop is")
 
 
 def run_segment(robot, args, power):
@@ -607,8 +636,7 @@ def main():
     args = ap.parse_args()
     if not -1000 <= args.power <= 1000:
         ap.error("--power moet tussen -1000 en 1000 liggen")
-    with robot_session(args.csv, "_heen_terug", args.ip, args.port, args.live, args.mqtt,
-                       args.mqtt_host, args.network) as robot:
+    with robot_session(args.csv, "_heen_terug", args.ip, args.port) as robot:
         prepare(robot, args.rest)
         robot.phase = "heen"
         run_segment(robot, args, args.power)

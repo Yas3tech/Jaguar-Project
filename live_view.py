@@ -14,6 +14,7 @@ Live berekeningen zijn een benadering van analyse_rit.py:
 """
 import json
 import math
+import os
 import socket
 import statistics as st
 import threading
@@ -26,6 +27,10 @@ from pathlib import Path
 from analyse_rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
 
 PAGE = Path(__file__).parent / "live.html"
+DASHBOARD = Path(__file__).parent / "dashboard.html"   # geschreven door analyse_rit.py
+OPTIONS_FILE = Path(__file__).parent / "live_opties.json"   # bewaard tussen de ritten
+PANELS = ("koers", "baan", "snelheid", "pitchroll", "gyro", "versnelling")
+DEFAULT_OPTIONS = {"auto_analyse": False, "panelen": {p: True for p in PANELS}}
 IMU_DT = 0.02             # IMU stuurt 50 Hz
 SPEED_CYCLES = 3          # encodersnelheid over 3 pollcycli (~0.6 s)
 ANGLE_ALPHA = 0.1         # laagdoorlaat pitch/roll (~0.2 s bij 50 Hz)
@@ -71,6 +76,26 @@ class LiveView:
         self.max_power = 0
         self.side_hist = deque(maxlen=SPEED_CYCLES + 1)   # (links, rechts) afstand per pollcyclus
         self.v_left = self.v_right = 0.0
+        # Analyseknop: CSV van deze rit, pas analyseerbaar als het rijscript hem gesloten heeft.
+        self.csv_path = None
+        self.csv_ready = False
+        self.dashboard = False
+        self.analyse_lock = threading.Lock()
+
+    def run_analysis(self):
+        """analyse_rit.py op de CSV van deze rit; geeft (HTTP-status, antwoord) terug."""
+        if self.csv_path is None:
+            return 409, {"fout": "Deze rit heeft geen CSV (--no-csv)."}
+        if not self.csv_ready:
+            return 409, {"fout": "De rit loopt nog."}
+        with self.analyse_lock:
+            import analyse_rit
+            try:
+                result, out_html = analyse_rit.run(self.csv_path)
+            except Exception as e:  # noqa: BLE001 - de fout hoort in de browser, de server moet blijven draaien
+                return 500, {"fout": f"Analyse mislukt: {type(e).__name__}: {e}"}
+            self.dashboard = out_html is not None
+            return 200, {"rit": result["summary"]["rit"], "dashboard": self.dashboard}
 
     def feed(self, t, phase, power, line):
         self.status["fase"] = phase
@@ -200,21 +225,104 @@ class LiveView:
 
     def message(self, start):
         return {"run": self.run_id, "naam": self.name, "start": start,
-                "rijen": self.samples[start:], "status": self.status, "bias": self.bias}
+                "rijen": self.samples[start:], "status": self.status, "bias": self.bias,
+                "csv": self.csv_path is not None, "csv_klaar": self.csv_ready, "dashboard": self.dashboard,
+                "opties": OPTIONS}
 
 
-def _handler(view):
+def clean_options(raw):
+    """Alleen gekende sleutels met een geldige waarde; de rest blijft op de standaardwaarde."""
+    o = json.loads(json.dumps(DEFAULT_OPTIONS))
+    if not isinstance(raw, dict):
+        return o
+    for key in ("auto_analyse",):
+        if isinstance(raw.get(key), bool):
+            o[key] = raw[key]
+    panels = raw.get("panelen")
+    if isinstance(panels, dict):
+        for p in PANELS:
+            if isinstance(panels.get(p), bool):
+                o["panelen"][p] = panels[p]
+    return o
+
+
+def load_options():
+    try:
+        return clean_options(json.loads(OPTIONS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return clean_options(None)
+
+
+def save_options(raw):
+    global OPTIONS
+    OPTIONS = clean_options(raw)
+    OPTIONS_FILE.write_text(json.dumps(OPTIONS, indent=2), encoding="utf-8")
+    return OPTIONS
+
+
+OPTIONS = load_options()
+
+
+class Hub:
+    """Wat de webserver toont: de LiveView van de huidige rit. Met bediening.py (control) wisselt
+    die per rit en kan de pagina ritten starten en stoppen."""
+
+    def __init__(self, view, control=None):
+        self.view = view
+        self.control = control
+
+
+def _handler(hub):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
+        def _local(self):
+            """Verzoek van deze laptop zelf (niet van een ander apparaat op de wifi)."""
+            return self.client_address[0] in ("127.0.0.1", "::1")
+
         def do_GET(self):
-            if self.path == "/stream":
+            path = self.path.split("?", 1)[0]
+            if path == "/stream":
                 return self._stream()
-            body = PAGE.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            if path == "/options.json":
+                return self._json(200, OPTIONS)
+            if path == "/dashboard":
+                if not DASHBOARD.exists():
+                    return self.send_error(404, "Nog geen dashboard: klik eerst op Analyse.")
+                return self._send(200, "text/html; charset=utf-8", DASHBOARD.read_bytes())
+            self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())   # ook /options: opent het opties-venster
+
+        def do_POST(self):
+            if self.path == "/analyse":
+                return self._json(*hub.view.run_analysis())
+            if self.path == "/stop":
+                if hub.control is None:
+                    return self._json(404, {"fout": "Deze pagina bestuurt de robot niet."})
+                return self._json(*hub.control.stop())     # STOP mag iedereen die meekijkt
+            if self.path not in ("/options", "/rit"):
+                return self.send_error(404)
+            if not self._local():   # opties en ritten starten bepalen hoe veilig de robot rijdt
+                return self._json(403, {"fout": "Dit kan alleen op de laptop die met de robot verbonden is."})
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = json.loads(self.rfile.read(min(length, 10_000)))
+            except ValueError:
+                return self._json(400, {"fout": "geen geldige JSON"})
+            if self.path == "/options":
+                return self._json(200, save_options(raw))
+            if hub.control is None:
+                return self._json(404, {"fout": "Ritten starten kan alleen met python bediening.py."})
+            return self._json(*hub.control.start(raw))
+
+        def _json(self, code, answer):
+            self._send(code, "application/json", json.dumps(answer).encode())
+
+        def _send(self, code, ctype, body):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
@@ -223,12 +331,18 @@ def _handler(view):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            sent = 0
+            sent, current = 0, None
+            local = self._local()
             try:
                 while True:
+                    view = hub.view
+                    if view is not current:   # nieuwe rit (bediening.py): de pagina begint opnieuw
+                        current, sent = view, 0
                     n = len(view.samples)
                     msg = view.message(sent)
                     msg["rijen"] = msg["rijen"][:n - sent]
+                    if hub.control is not None:
+                        msg["bediening"] = dict(hub.control.state, mag_starten=local)
                     self.wfile.write(f"data: {json.dumps(msg, separators=(',', ':'))}\n\n".encode())
                     self.wfile.flush()
                     sent = n
@@ -247,11 +361,34 @@ def lan_addresses():
     return sorted(a for a in addrs if not a.startswith(("127.", "169.254.")))
 
 
-def start(name="", port=8765, open_browser=True, network=True):
+class Server(ThreadingHTTPServer):
+    # Op Windows laat SO_REUSEADDR een tweede script stil op dezelfde poort starten; de browser
+    # krijgt dan de oude rit. Zonder die optie meldt het tweede script dat de poort bezet is.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":   # ook 127.0.0.1 naast 0.0.0.0 op dezelfde poort weigeren
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def start(name="", port=8765, open_browser=True, network=True, csv_path=None):
     """Start de webserver in de achtergrond en geef de LiveView terug.
-    network=True: ook bereikbaar voor andere apparaten op hetzelfde netwerk (alleen lezen)."""
+    network=True: ook bereikbaar voor andere apparaten op hetzelfde netwerk (meekijken en de analyse starten).
+    csv_path: CSV van deze rit, voor de knop Analyse."""
     view = LiveView(name)
-    server = ThreadingHTTPServer(("0.0.0.0" if network else "127.0.0.1", port), _handler(view))
+    view.csv_path = csv_path
+    serve(Hub(view), port, open_browser, network)
+    return view
+
+
+def serve(hub, port=8765, open_browser=True, network=True):
+    """Webserver voor `hub` in een achtergronddraad."""
+    try:
+        server = Server(("0.0.0.0" if network else "127.0.0.1", port), _handler(hub))
+    except OSError as e:
+        raise SystemExit(f"Poort {port} is bezet ({e.strerror}): er draait nog een vorig script. "
+                         "Druk daar op Enter of sluit die terminal.") from None
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"
@@ -261,4 +398,8 @@ def start(name="", port=8765, open_browser=True, network=True):
             print(f"  meekijken vanaf een ander apparaat op hetzelfde netwerk: http://{ip}:{port}/")
     if open_browser:
         webbrowser.open(url)
-    return view
+
+
+if __name__ == "__main__":
+    import bediening   # zelfde pagina, met rijden vanuit de browser
+    bediening.main()

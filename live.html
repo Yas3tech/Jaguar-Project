@@ -44,6 +44,54 @@ h1 { font-size: 24px; margin: 0; font-weight: 600; }
 canvas { width: 100%; height: 190px; display: block; }
 canvas.square { height: 260px; }
 .note { font-size: 12px; color: var(--ink-3); margin: 0; }
+/* Analyse: knop in de kop, dashboard in een venster boven de live pagina */
+.actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.btn { font: inherit; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--s1); background: var(--s1); color: #fff; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+.btn:disabled { cursor: default; background: var(--chip); border-color: var(--rule); color: var(--ink-3); }
+.btn:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+#a-msg { font-size: 12px; color: var(--ink-3); }
+#a-msg.bad { color: var(--bad); }
+dialog { padding: 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); color: var(--ink); overflow: hidden; }
+#dlg { width: min(1400px, 96vw); height: 92vh; }
+#dlg-opt { width: min(560px, 96vw); max-height: 92vh; }
+dialog[open] { display: flex; flex-direction: column; }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+.dlg-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+.dlg-head h2 { font-size: 15px; margin: 0; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlg-head a { font-size: 13px; color: var(--s1); }
+dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+/* Opties-venster */
+.opt-body { overflow-y: auto; padding: 12px 14px; display: grid; gap: 14px; }
+.opt-body section { display: grid; gap: 10px; }
+.opt-body section + section { border-top: 1px solid var(--rule); padding-top: 12px; }
+.opt-body h3 { font-size: 13px; margin: 0; font-weight: 600; color: var(--ink-2); }
+.opt-body label.row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.opt-body label.row input { width: 18px; height: 18px; margin: 0; accent-color: var(--s1); flex: none; }
+.opt-body .field { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 10px; }
+.opt-body select { font: inherit; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); max-width: 180px; }
+.opt-body fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+.opt-body fieldset:disabled { opacity: .5; }
+.opt-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 14px; }
+/* Rijden */
+#dlg-rit { width: min(600px, 96vw); max-height: 92vh; }
+.btn.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-size: 15px; padding: 7px 22px; letter-spacing: .05em; }
+.steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps li { padding-left: 4px; }
+.steps .row { display: flex; align-items: center; gap: 8px; }
+.steps .kind { width: 82px; font-weight: 600; }
+.steps input, #r-power { font: inherit; width: 84px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); }
+.steps .unit { color: var(--ink-3); width: 18px; }
+.steps button { font: inherit; border: 0; background: none; color: var(--ink-3); cursor: pointer; padding: 2px 6px; font-size: 16px; line-height: 1; }
+.steps button:hover { color: var(--bad); }
+.steps button:disabled { visibility: hidden; }
+.add { display: flex; flex-wrap: wrap; gap: 6px; }
+.add .btn { padding: 4px 10px; }
+#rit-msg.bad { color: var(--bad); }
+#opt-state { font-size: 12px; color: var(--ink-3); }
+#opt-state.ok { color: var(--good); } #opt-state.bad { color: var(--bad); }
+.panel[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -52,7 +100,80 @@ canvas.square { height: 260px; }
     <h1>Jaguar live</h1>
     <span id="conn" class="chip wait"><i></i>wachten op script</span>
     <span id="name" class="sub"></span>
+    <div class="actions">
+      <span id="a-msg" role="status"></span>
+      <button id="b-stop" class="btn stop" hidden title="Motoren 0 en E-Stop aan (spatiebalk)">STOP</button>
+      <button id="b-rit" class="btn" hidden>Rijden</button>
+      <button id="b-opt" class="btn ghost">Opties</button>
+      <button id="b-dash" class="btn ghost" hidden>Dashboard openen</button>
+      <button id="b-analyse" class="btn" disabled>Analyse</button>
+    </div>
   </header>
+
+  <dialog id="dlg" aria-labelledby="dlg-title">
+    <div class="dlg-head">
+      <h2 id="dlg-title">Analyse</h2>
+      <a href="/dashboard" target="_blank" rel="noopener">nieuw tabblad</a>
+      <button id="b-close" class="btn ghost" aria-label="Sluiten">Sluiten</button>
+    </div>
+    <iframe id="dlg-frame" title="Dashboard van de rit"></iframe>
+  </dialog>
+
+  <dialog id="dlg-rit" aria-labelledby="rit-title">
+    <div class="dlg-head">
+      <h2 id="rit-title">Parcours rijden</h2>
+      <button id="b-rit-close" class="btn ghost">Sluiten</button>
+    </div>
+    <div class="opt-body">
+      <section>
+        <h3>Stappen</h3>
+        <ol id="steps" class="steps"></ol>
+        <div class="add">
+          <button class="btn ghost" data-add="vooruit">+ Vooruit</button>
+          <button class="btn ghost" data-add="achteruit">+ Achteruit</button>
+          <button class="btn ghost" data-add="links">+ Links</button>
+          <button class="btn ghost" data-add="rechts">+ Rechts</button>
+        </div>
+        <p class="note" id="steps-sum"></p>
+      </section>
+      <section>
+        <div class="field"><label for="r-power">Vermogen</label>
+          <span><input id="r-power" type="number" min="50" max="600" step="10" value="250"> <span class="note" id="r-speed"></span></span></div>
+      </section>
+      <section>
+        <p class="note">Vrije ruimte rond de robot en de noodstop bij de hand. Vóór het rijden staat de robot 3 s stil (rustmeting).
+          Tijdens de rit stopt de rode knop STOP of de spatiebalk de robot.</p>
+        <p id="rit-msg" class="note" role="status"></p>
+        <div><button id="b-go" class="btn">Start rit</button></div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-opt" aria-labelledby="opt-title">
+    <div class="dlg-head">
+      <h2 id="opt-title">Opties</h2>
+      <span id="opt-state" role="status"></span>
+      <button id="b-opt-close" class="btn ghost">Sluiten</button>
+    </div>
+    <div class="opt-body">
+      <section>
+        <h3>Grafieken</h3>
+        <div class="opt-panels">
+          <label class="row"><input type="checkbox" data-opt="koers"> Koers</label>
+          <label class="row"><input type="checkbox" data-opt="baan"> Geschatte baan</label>
+          <label class="row"><input type="checkbox" data-opt="snelheid"> Snelheid</label>
+          <label class="row"><input type="checkbox" data-opt="pitchroll"> Pitch en roll</label>
+          <label class="row"><input type="checkbox" data-opt="gyro"> Gyro</label>
+          <label class="row"><input type="checkbox" data-opt="versnelling"> Versnelling</label>
+        </div>
+      </section>
+      <section>
+        <h3>Na de rit</h3>
+        <label class="row"><input type="checkbox" id="o-auto"> Vanzelf analyseren en het dashboard openen</label>
+      </section>
+      <p class="note">Wijzigingen gelden meteen, ook op andere apparaten die meekijken, en blijven bewaard voor de volgende ritten.</p>
+    </div>
+  </dialog>
 
   <div class="tiles">
     <div class="tile"><div class="k">Fase</div><div class="v" id="v-fase">–</div><div class="n" id="n-tijd">t = –</div></div>
@@ -68,22 +189,22 @@ canvas.square { height: 260px; }
   </div>
 
   <div class="grid">
-    <div class="panel"><h2>Koers</h2>
+    <div class="panel" data-panel="koers"><h2>Koers</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>gyro (Z)</span><span><b style="background:var(--s2)"></b>encoders (rechts − links)</span></div>
       <canvas id="c-koers"></canvas></div>
-    <div class="panel"><h2>Geschatte baan · bovenaanzicht</h2>
+    <div class="panel" data-panel="baan"><h2>Geschatte baan · bovenaanzicht</h2>
       <canvas id="c-baan" class="square"></canvas>
       <p class="note">Encoderafstand + gyrokoers, gelijke schaal. Positieve y = links.</p></div>
-    <div class="panel"><h2>Snelheid en motoropdracht</h2>
+    <div class="panel" data-panel="snelheid"><h2>Snelheid en motoropdracht</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>snelheid m/s</span><span><b style="background:var(--s2)"></b>opdracht /1000</span></div>
       <canvas id="c-v"></canvas></div>
-    <div class="panel"><h2>Pitch en roll</h2>
+    <div class="panel" data-panel="pitchroll"><h2>Pitch en roll</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>pitch (neus omhoog +)</span><span><b style="background:var(--s2)"></b>roll (linkerkant hoger +)</span></div>
       <canvas id="c-pr"></canvas></div>
-    <div class="panel"><h2>Gyro</h2>
+    <div class="panel" data-panel="gyro"><h2>Gyro</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>X °/s</span><span><b style="background:var(--s2)"></b>Y °/s</span><span><b style="background:var(--s3)"></b>Z °/s</span></div>
       <canvas id="c-g"></canvas></div>
-    <div class="panel"><h2>Versnelling</h2>
+    <div class="panel" data-panel="versnelling"><h2>Versnelling</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>X g</span><span><b style="background:var(--s2)"></b>Y g</span><span><b style="background:var(--s3)"></b>Z g</span></div>
       <canvas id="c-a"></canvas></div>
   </div>
@@ -101,15 +222,179 @@ const DRIVE = new Set(["rijden", "heen", "terug"]);
 const es = new EventSource("/stream");
 es.onmessage = (e) => {
   const m = JSON.parse(e.data);
-  if (m.run !== run) { run = m.run; rows = []; }
+  if (m.run !== run) {   // nieuwe rit (ook gestart vanaf deze pagina): grafieken en analyse opnieuw
+    run = m.run; rows = [];
+    analysed = 0; frameSrc = null; autoDone = false; msg("");
+  }
   if (m.start === rows.length) rows.push(...m.rijen);
   status = m.status; bias = m.bias;
   $("name").textContent = m.naam;
   setConn(status.klaar ? ["ok", "rit klaar"] : ["ok", "live"]);
+  applyOptions(m.opties);
+  analyseState(m);
+  if (status.melding && status.melding !== lastMelding) { lastMelding = status.melding; msg(status.melding); }
+  controlState(m.bediening);
   dirty = true;
 };
-es.onerror = () => setConn(status.klaar ? ["ok", "rit klaar · script gestopt"] : ["bad", "geen verbinding met script"]);
+
+let lastMelding = null;   // bericht van het rijscript 
+
+// Rijden vanaf de pagina (alleen met python bediening.py): parcours samenstellen, starten, STOP.
+const KINDS = { vooruit: ["Vooruit", "m", 1], achteruit: ["Achteruit", "m", 1], links: ["Links", "°", 90], rechts: ["Rechts", "°", 90] };
+let steps = [["vooruit", 1]], lastResult = null;
+try {   // laatste parcours van deze browser
+  const s = JSON.parse(localStorage.getItem("jaguar-parcours")).filter((x) => KINDS[x?.[0]] && +x[1] > 0).map(([k, v]) => [k, +v]);
+  if (s.length) steps = s;
+} catch {}
+function controlState(b) {
+  $("b-rit").hidden = !b || !b.mag_starten || b.bezig;
+  $("b-stop").hidden = !b || !b.bezig;
+  if (b?.bezig && $("dlg-rit").open) $("dlg-rit").close();
+  const key = b && !b.bezig ? `${b.resultaat}|${b.fout}` : null;
+  if (key !== lastResult) {
+    lastResult = key;
+    if (b?.resultaat === "gestopt") msg("rit gestopt met STOP", true);
+    else if (b?.resultaat === "fout") msg(`rit niet gelukt: ${b.fout}`, true);
+  }
+}
+function renderSteps() {
+  $("steps").innerHTML = "";
+  steps.forEach(([kind, value], i) => {
+    const [label, unit] = KINDS[kind];
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="row"><span class="kind">${label}</span>
+      <input type="number" min="0" step="${unit === "m" ? 0.1 : 5}" value="${value}" aria-label="${label} in ${unit === "m" ? "meter" : "graden"}">
+      <span class="unit">${unit}</span><button aria-label="Stap ${i + 1} weghalen" ${steps.length < 2 ? "disabled" : ""}>×</button></span>`;
+    li.querySelector("input").oninput = (e) => { steps[i][1] = parseFloat(e.target.value.replace(",", ".")) || 0; summary(); };
+    li.querySelector("button").onclick = () => { steps.splice(i, 1); renderSteps(); };
+    $("steps").append(li);
+  });
+  summary();
+}
+function summary() {
+  try { localStorage.setItem("jaguar-parcours", JSON.stringify(steps)); } catch {}
+  $("steps-sum").textContent = "Zelfde als: python parcours.py " +
+    steps.map(([k, v]) => `${k[0]}:${String(v).replace(".", ",")}`).join(" ");
+  const p = +$("r-power").value;
+  $("r-speed").textContent = p ? `≈ ${nl(p * 0.0031, 1)} m/s op vlakke grond` : "";
+}
+for (const b of document.querySelectorAll("[data-add]"))
+  b.onclick = () => { steps.push([b.dataset.add, KINDS[b.dataset.add][2]]); renderSteps(); };
+$("r-power").oninput = summary;
+$("b-rit").onclick = () => { $("rit-msg").textContent = ""; renderSteps(); $("dlg-rit").showModal(); };
+$("b-rit-close").onclick = () => $("dlg-rit").close();
+$("b-go").onclick = async () => {
+  const m = $("rit-msg");
+  m.className = "note"; m.textContent = "starten…";
+  try {
+    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stappen: steps, power: Math.round(+$("r-power").value) }) });
+    const a = await r.json();
+    if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    $("dlg-rit").close();
+  } catch (e) {
+    m.className = "note bad"; m.textContent = e instanceof TypeError ? "geen verbinding met bediening.py" : e.message;
+  }
+};
+async function stopRobot() {
+  try { await fetch("/stop", { method: "POST" }); }
+  catch { msg("STOP niet aangekomen: gebruik de noodstop!", true); }
+}
+$("b-stop").onclick = stopRobot;
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !$("b-stop").hidden && !e.target.closest("input, select, textarea")) { e.preventDefault(); stopRobot(); }
+});
+
+// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen.
+function applyOptions(o) {
+  if (!o) return;
+  for (const p of document.querySelectorAll("[data-panel]")) {
+    const show = o.panelen[p.dataset.panel] !== false;
+    if (p.hidden === show) { p.hidden = !show; dirty = true; }
+  }
+}
+es.onerror = () => {
+  setConn(status.klaar ? ["ok", "rit klaar · script gestopt"] : ["bad", "geen verbinding met script"]);
+  if (!busy) { $("b-analyse").disabled = true; msg(frameSrc ? "" : "script gestopt: analyse niet meer mogelijk"); }
+};
 function setConn([cls, txt]) { const c = $("conn"); c.className = "chip " + cls; c.lastChild.textContent = txt; }
+
+// Analyse: het rijscript houdt de server na de rit open; POST /analyse draait analyse_rit.py op deze CSV.
+let busy = false, frameSrc = null, analysed = 0;
+function msg(text, bad = false) { const e = $("a-msg"); e.textContent = text; e.className = bad ? "bad" : ""; }
+function analyseState(m) {
+  if (busy) return;
+  const b = $("b-analyse");
+  b.disabled = !m.csv || !m.csv_klaar;
+  b.textContent = analysed ? "Opnieuw analyseren" : "Analyse";
+  $("b-dash").hidden = !m.dashboard && !frameSrc;
+  if (!m.csv) { if (!m.bediening) msg("geen CSV: geen analyse"); }
+  else if (!m.csv_klaar) msg("analyse na de rit");
+  else if (!$("a-msg").classList.contains("bad")) msg("");
+  // Optie: na de rit vanzelf analyseren (één keer per rit).
+  if (m.opties?.auto_analyse && m.csv && m.csv_klaar && !analysed && !autoDone) { autoDone = true; b.click(); }
+}
+let autoDone = false;
+$("b-analyse").onclick = async () => {
+  const b = $("b-analyse");
+  busy = true; b.disabled = true; b.textContent = "Analyse loopt…"; msg("");
+  try {
+    const r = await fetch("/analyse", { method: "POST" });
+    const a = await r.json();
+    if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    analysed++;
+    frameSrc = null;              // nieuw dashboard: het venster laadt opnieuw
+    $("b-dash").hidden = false;
+    openDash();
+  } catch (e) {
+    msg(e instanceof TypeError ? "geen verbinding met het script" : e.message, true);
+  } finally {
+    busy = false; b.disabled = false; b.textContent = analysed ? "Opnieuw analyseren" : "Analyse";
+  }
+};
+function openDash() {
+  // Eén keer laden per analyse: heropenen toont hetzelfde dashboard, ook als het script al gestopt is.
+  if (!frameSrc) { frameSrc = `/dashboard?v=${Date.now()}`; $("dlg-frame").src = frameSrc; }
+  $("dlg-title").textContent = `Analyse · ${$("name").textContent}`;
+  $("dlg").showModal();
+}
+$("b-dash").onclick = openDash;
+$("b-close").onclick = () => $("dlg").close();
+for (const d of document.querySelectorAll("dialog"))
+  d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // klik naast het venster
+
+// Opties-venster: bewaren op de server (POST /options); /options opent de pagina met dit venster open.
+function fillOptions(o) {
+  $("o-auto").checked = o.auto_analyse;
+  for (const c of document.querySelectorAll("[data-opt]")) c.checked = o.panelen[c.dataset.opt] !== false;
+}
+function optState(text, cls = "") { $("opt-state").textContent = text; $("opt-state").className = cls; }
+async function openOptions() {
+  optState("");
+  try { fillOptions(await (await fetch("/options.json")).json()) }
+  catch { optState("geen verbinding met het script", "bad"); }
+  $("dlg-opt").showModal();
+}
+$("b-opt").onclick = openOptions;
+$("b-opt-close").onclick = () => $("dlg-opt").close();
+$("dlg-opt").addEventListener("close", () => { if (location.pathname === "/options") history.replaceState(null, "", "/"); });
+$("dlg-opt").addEventListener("change", async () => {
+  const o = {
+    auto_analyse: $("o-auto").checked,
+    panelen: Object.fromEntries([...document.querySelectorAll("[data-opt]")].map((c) => [c.dataset.opt, c.checked])),
+  };
+  optState("bewaren…");
+  try {
+    const r = await fetch("/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(o) });
+    const saved = await r.json();
+    if (!r.ok) throw new Error(saved.fout || `HTTP ${r.status}`);
+    fillOptions(saved); applyOptions(saved);
+    optState("bewaard", "ok");
+  } catch (e) {
+    optState(e instanceof TypeError ? "geen verbinding met het script: niet bewaard" : e.message, "bad");
+  }
+});
+if (location.pathname === "/options") openOptions();
 
 function tiles() {
   const r = rows[rows.length - 1];
