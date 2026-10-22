@@ -102,6 +102,21 @@ input[type=number] { font-variant-numeric: tabular-nums; }
 .stuk .kop button:hover { color: var(--bad); }
 .stuk .rij { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .stuk .rij label { display: grid; gap: 2px; font-size: 11px; color: var(--ink-3); }
+.voorb { width: min(980px, 96vw); }
+.voorb .inh { padding: 0; gap: 0; grid-template-columns: 260px 1fr; min-height: 480px; }
+@media (max-width: 760px) { .voorb .inh { grid-template-columns: 1fr; } }
+.voorb .lijst { border-right: 1px solid var(--rule); padding: 12px; display: grid; gap: 8px; align-content: start; background: var(--bg); }
+.voorb .lijst h2 { padding: 4px 6px 8px; }
+.vorm { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; text-align: left; padding: 8px; border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); cursor: pointer; }
+.vorm:hover { border-color: var(--accent); } .vorm[aria-pressed=true] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.vorm canvas { width: 64px; height: 46px; border-radius: 6px; background: var(--canvas); }
+.vorm b { display: block; font-size: 14px; } .vorm span { font-size: 12px; color: var(--ink-3); }
+.voorb .detail { padding: 18px 20px; display: grid; gap: 14px; align-content: start; }
+.voorb .detail canvas { width: 100%; height: 230px; border-radius: 12px; background: var(--canvas); border: 1px solid var(--rule); }
+.voorb .par { display: grid; grid-template-columns: 1fr 90px; gap: 6px 10px; align-items: center; }
+.voorb .par input[type=range] { grid-column: 1 / -1; accent-color: var(--accent); }
+.plak { display: grid; gap: 8px; border-top: 1px solid var(--rule); padding-top: 12px; }
+.plak textarea { width: 100%; min-height: 70px; font-family: var(--f-data); font-size: 11.5px; padding: 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); color: var(--ink); resize: vertical; }
 .melding { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; margin: 0; }
 .melding.bad { color: var(--bad); } .melding.warn { color: var(--warn); } .melding.ok { color: var(--good); }
 .cmd { font-family: var(--f-data); font-size: 11.5px; background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 8px; word-break: break-all; color: var(--ink-2); max-height: 90px; overflow: auto; }
@@ -177,6 +192,7 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <h1>Parcours <span class="badge" id="badge">Binnen</span></h1>
     <button class="btn ghost" id="b-undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
     <button class="btn ghost" id="b-wis">Wissen</button>
+    <button class="btn" id="b-voorb" style="background:var(--accent-2);border-color:var(--accent-2)">✦ Voorbeelden</button>
     <span class="ruimte"></span>
     <span class="melding" id="status" role="status"></span>
     <button class="btn go" id="b-start">Start rit…</button>
@@ -185,7 +201,8 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <div class="vlak" id="vlak">
       <canvas id="cv" aria-label="Tekenvlak voor het parcours"></canvas>
       <div class="hulp" id="hulp"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen ·
-        rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</div>
+        rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken<br>
+        <b>Liever niet tekenen?</b> <button class="btn" id="b-voorb2" style="padding:3px 10px;margin-top:4px">✦ Kies een voorbeeld</button></div>
       <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
       <div id="kaartmelding" hidden></div>
       <div class="sim">
@@ -249,6 +266,25 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     </aside>
   </div>
 </div>
+
+<dialog id="dlg-voorb" class="voorb" aria-labelledby="vb-titel">
+  <div class="inh">
+    <div class="lijst"><h2 id="vb-titel">Voorbeelden</h2><div id="vb-lijst" style="display:grid;gap:8px"></div></div>
+    <div class="detail">
+      <div><h2 id="vb-naam" style="margin:0 0 4px"></h2><p class="melding" id="vb-uitleg"></p></div>
+      <canvas id="vb-cv" aria-label="Voorbeeld van de route"></canvas>
+      <div class="par" id="vb-par"></div>
+      <p class="melding" id="vb-msg"></p>
+      <div class="knoppen"><button class="btn ghost" id="vb-sluit">Sluiten</button><button class="btn go" id="vb-gebruik">Gebruik deze route</button></div>
+      <div class="plak">
+        <h3 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3)">Route plakken of kopiëren</h3>
+        <textarea id="vb-json" placeholder='{"b0":0,"pts":[[0,0,0],[0,3,0.8],[3,3,0]]}' aria-label="Route als tekst"></textarea>
+        <div style="display:flex;gap:8px"><button class="btn ghost" id="vb-laad">Laad geplakte route</button><button class="btn ghost" id="vb-kopieer">Kopieer huidige route</button></div>
+        <p class="melding">Een route is een lijst punten [x, y, radius] in meters ten opzichte van de start: x naar rechts op het scherm (oost), y omhoog (noord). b0 is de richting waarin het robot bij de start kijkt (0 = omhoog, 90 = rechts). Radius is de bocht bij dat punt (0 = draaien ter plaatse). Het eerste punt is altijd de start [0, 0, 0].</p>
+      </div>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="dlg-start" aria-labelledby="ds-titel">
   <div class="inh">
@@ -639,6 +675,110 @@ $("b-loc").onclick = () => { if (!navigator.geolocation) return melding("Locatie
 function melding(t) { const s = $("status"); s.textContent = t; clearTimeout(melding.t); melding.t = setTimeout(() => (s.textContent = ""), 6000); }
 $("b-kopieer").onclick = async () => { try { await navigator.clipboard.writeText($("cmd").textContent); melding("gekopieerd"); } catch { melding("kopiëren niet gelukt: selecteer de tekst zelf"); } };
 
+/* ---------------------------------------------------------- voorbeelden (de punten worden voor je gezet) */
+// Alle vormen in het stelsel van het robot: u = naar rechts, v = vooruit (meters, start = 0,0). Daarna gedraaid naar de kijkrichting.
+const SJABLONEN = [
+  { id: "lijn", naam: "Rechte lijn", uitleg: "Vooruit rijden over een afstand.", par: [{ k: "L", n: "Lengte (m)", min: 0.5, max: 30, st: 0.5, d: 5 }],
+    maak: (p) => [[0, 0, 0], [0, p.L, 0]] },
+  { id: "heen", naam: "Heen en terug", uitleg: "Vooruit, 180° keren en terug naar de start.", par: [{ k: "L", n: "Lengte (m)", min: 0.5, max: 30, st: 0.5, d: 5 }],
+    maak: (p) => [[0, 0, 0], [0, p.L, 0], [0, 0, 0]] },
+  { id: "vierkant", naam: "Vierkant", uitleg: "Een vierkant met afgeronde hoeken (radius 0 = scherpe hoeken met draaien ter plaatse).", par: [
+      { k: "z", n: "Zijde (m)", min: 1, max: 20, st: 0.5, d: 4 }, { k: "r", n: "Radius hoeken (m)", min: 0, max: 5, st: 0.1, d: 0.8 }, { k: "kant", n: "Rechtsom (1) of linksom (−1)", min: -1, max: 1, st: 2, d: 1 }],
+    maak: (p) => { const z = p.z, k = p.kant >= 0 ? 1 : -1, r = Math.min(p.r, z / 2 - 0.01); return [[0, 0, 0], [0, z, r], [k * z, z, r], [k * z, 0, r], [0, 0, 0]]; } },
+  { id: "rechthoek", naam: "Rechthoek", uitleg: "Een rechthoek met afgeronde hoeken.", par: [
+      { k: "b", n: "Breedte (m)", min: 1, max: 20, st: 0.5, d: 3 }, { k: "l", n: "Lengte (m)", min: 1, max: 30, st: 0.5, d: 6 }, { k: "r", n: "Radius hoeken (m)", min: 0, max: 5, st: 0.1, d: 0.8 }, { k: "kant", n: "Rechtsom (1) of linksom (−1)", min: -1, max: 1, st: 2, d: 1 }],
+    maak: (p) => { const k = p.kant >= 0 ? 1 : -1, r = Math.min(p.r, Math.min(p.b, p.l) / 2 - 0.01); return [[0, 0, 0], [0, p.l, r], [k * p.b, p.l, r], [k * p.b, 0, r], [0, 0, 0]]; } },
+  { id: "ovaal", naam: "Ovaal (baan)", uitleg: "Twee rechte stukken met halve cirkels: een renbaan.", par: [
+      { k: "L", n: "Lengte rechte stukken (m)", min: 1, max: 30, st: 0.5, d: 5 }, { k: "R", n: "Radius bochten (m)", min: 0.5, max: 10, st: 0.1, d: 1.5 }, { k: "kant", n: "Rechtsom (1) of linksom (−1)", min: -1, max: 1, st: 2, d: 1 }],
+    maak: (p) => { const k = p.kant >= 0 ? 1 : -1, R = p.R * 0.999; return [[0, 0, 0], [0, p.L, R], [k * 2 * p.R, p.L, R], [k * 2 * p.R, 0, R], [0, 0, 0]]; } },
+  { id: "cirkel", naam: "Cirkel", uitleg: "Een volledige cirkel; het robot start op de rand en rijdt rond.", par: [
+      { k: "R", n: "Radius (m)", min: 0.5, max: 15, st: 0.1, d: 2 }, { k: "kant", n: "Rechtsom (1) of linksom (−1)", min: -1, max: 1, st: 2, d: 1 }],
+    maak: (p) => { const k = p.kant >= 0 ? 1 : -1, n = 12, t = p.R * Math.tan(Math.PI / n), pts = [[0, 0, 0]]; let u = 0, v = 0, h = 90;
+      for (let i = 0; i < n; i++) { const step = i === 0 ? t : 2 * t; u += Math.cos(h * RAD) * step; v += Math.sin(h * RAD) * step; pts.push([u, v, p.R * 0.999]); h -= k * 360 / n; }
+      pts.push([0, 0, 0]); return pts; } },
+  { id: "slalom", naam: "Slalom", uitleg: "Zigzaggen tussen denkbeeldige pionnen, links en rechts van de lijn.", par: [
+      { k: "n", n: "Aantal pionnen", min: 2, max: 10, st: 1, d: 4 }, { k: "d", n: "Afstand tussen pionnen (m)", min: 1, max: 6, st: 0.25, d: 2.5 }, { k: "a", n: "Uitwijking (m)", min: 0.2, max: 3, st: 0.1, d: 0.7 }, { k: "r", n: "Radius bochten (m)", min: 0, max: 3, st: 0.1, d: 1 }],
+    maak: (p) => { const pts = [[0, 0, 0]]; for (let i = 1; i <= p.n; i++) pts.push([(i % 2 ? -1 : 1) * p.a, i * p.d, p.r]); pts.push([0, (p.n + 1) * p.d, 0]); return pts; } },
+];
+let sjCur = SJABLONEN[0], sjP = {};
+function sjNaarEnu(lok, b0) {               // robotstelsel -> (oost, noord) bij kijkrichting b0 (kompaskoers)
+  const c = Math.cos(b0 * RAD), sn = Math.sin(b0 * RAD);
+  return lok.map(([u, v, r]) => ({ x: +(u * c + v * sn).toFixed(4), y: +(-u * sn + v * c).toFixed(4), r: +r.toFixed(3) }));
+}
+function sjTekenVoorbeeld(cvs, pts) {        // kleine voorvertoning van de route
+  const d = window.devicePixelRatio || 1, w = cvs.clientWidth || 64, h = cvs.clientHeight || 46;
+  cvs.width = Math.round(w * d); cvs.height = Math.round(h * d); const g = cvs.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0);
+  const pl = plan(pts, 0, 250), q = pl.poly.length > 1 ? pl.poly : pts;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const a of q.concat(pts)) { x0 = Math.min(x0, a.x); x1 = Math.max(x1, a.x); y0 = Math.min(y0, a.y); y1 = Math.max(y1, a.y); }
+  const m = Math.min(14, w * .12), k = Math.min((w - 2 * m) / Math.max(0.5, x1 - x0), (h - 2 * m) / Math.max(0.5, y1 - y0)), ox = (w - k * (x1 - x0)) / 2, oy = (h - k * (y1 - y0)) / 2;
+  const X = (x) => ox + (x - x0) * k, Y = (y) => h - oy - (y - y0) * k;
+  g.lineJoin = "round"; g.lineCap = "round"; g.strokeStyle = css("--accent"); g.lineWidth = Math.max(1.5, Math.min(4, w / 60)); g.beginPath();
+  q.forEach((a, i) => (i ? g.lineTo(X(a.x), Y(a.y)) : g.moveTo(X(a.x), Y(a.y)))); g.stroke();
+  g.fillStyle = css("--accent-3"); g.beginPath(); g.arc(X(pts[0].x), Y(pts[0].y), Math.max(2.5, w / 50), 0, 7); g.fill();
+  const e = pts[pts.length - 1]; g.fillStyle = css("--accent-2"); g.beginPath(); g.arc(X(e.x), Y(e.y), Math.max(2.5, w / 50), 0, 7); g.fill();
+}
+const sjPunten = (sj, par) => sjNaarEnu(sj.maak(par), 0);
+function sjLijst() {
+  const el = $("vb-lijst"); el.innerHTML = "";
+  for (const sj of SJABLONEN) {
+    const par = Object.fromEntries(sj.par.map((q) => [q.k, q.d])), b = document.createElement("button");
+    b.className = "vorm"; b.setAttribute("aria-pressed", sj === sjCur); b.innerHTML = `<canvas></canvas><div><b>${sj.naam}</b><span>${sj.par.length} instelling${sj.par.length > 1 ? "en" : ""}</span></div>`;
+    b.onclick = () => { sjCur = sj; sjP = {}; sjToon(); sjLijst(); };
+    el.append(b); setTimeout(() => sjTekenVoorbeeld(b.querySelector("canvas"), sjPunten(sj, par)), 0);
+  }
+}
+function sjToon() {
+  const sj = sjCur; $("vb-naam").textContent = sj.naam; $("vb-uitleg").textContent = sj.uitleg;
+  const el = $("vb-par"); el.innerHTML = "";
+  for (const q of sj.par) {
+    if (sjP[q.k] == null) sjP[q.k] = q.d;
+    if (q.k === "kant") {                    // rechtsom / linksom als twee knoppen
+      const lab = document.createElement("label"); lab.textContent = "Richting";
+      const seg = document.createElement("div"); seg.className = "seg"; seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Richting van de bocht");
+      for (const [w, t] of [[1, "Rechtsom ↻"], [-1, "Linksom ↺"]]) { const b = document.createElement("button"); b.textContent = t; b.setAttribute("aria-pressed", sjP.kant === w);
+        b.onclick = () => { sjP.kant = w; for (const x of seg.children) x.setAttribute("aria-pressed", x === b); sjVoorbeeld(); }; seg.append(b); }
+      el.append(lab, seg); continue;
+    }
+    const lab = document.createElement("label"); lab.textContent = q.n; lab.htmlFor = "vp-" + q.k;
+    const num = document.createElement("input"); num.type = "number"; num.id = "vp-" + q.k; num.min = q.min; num.max = q.max; num.step = q.st; num.value = sjP[q.k];
+    const rng = document.createElement("input"); rng.type = "range"; rng.min = q.min; rng.max = q.max; rng.step = q.st; rng.value = sjP[q.k]; rng.setAttribute("aria-label", q.n);
+    const zet = (v) => { v = Math.max(q.min, Math.min(q.max, parseFloat(String(v).replace(",", ".")))); if (!isFinite(v)) v = q.d; sjP[q.k] = v; num.value = v; rng.value = v; sjVoorbeeld(); };
+    num.onchange = () => zet(num.value); rng.oninput = () => zet(rng.value);
+    el.append(lab, num, rng);
+  }
+  sjVoorbeeld();
+}
+function sjVoorbeeld() {
+  const pts = sjPunten(sjCur, sjP), pl = plan(pts, 0, S.power); sjTekenVoorbeeld($("vb-cv"), pts);
+  const m = $("vb-msg"); m.className = "melding";
+  if (pl.fouten.length) { m.classList.add("bad"); m.textContent = pl.fouten[0] + " Maak de radius kleiner of de vorm groter."; $("vb-gebruik").disabled = true; }
+  else { m.textContent = `${nl(pl.lengte, 1)} m rijden, ${pl.draaien} draaien, ${pl.bogen} bogen.`; $("vb-gebruik").disabled = false; }
+}
+$("b-voorb").onclick = $("b-voorb2").onclick = () => { sjLijst(); $("dlg-voorb").showModal(); sjToon(); };
+$("vb-sluit").onclick = () => $("dlg-voorb").close();
+$("dlg-voorb").addEventListener("click", (e) => { if (e.target === $("dlg-voorb")) $("dlg-voorb").close(); });
+$("vb-gebruik").onclick = () => {
+  snapshot(); S.pts = sjNaarEnu(sjCur.maak(sjP), S.b0); simT = 0; spelen = false; sync(true); $("dlg-voorb").close();
+  melding(`${sjCur.naam} gezet: je kunt de punten nog verslepen`);
+};
+function routeJson() { return JSON.stringify({ modus: S.modus, b0: Math.round(S.b0), power: S.power, bogen: S.bogen,
+  pts: S.pts.map((p, i) => i ? [+p.x.toFixed(3), +p.y.toFixed(3), +(p.r || 0).toFixed(3)] : [0, 0, 0]) }); }
+function laadRoute(tekst) {
+  let o; try { o = JSON.parse(tekst); } catch { return "Dat is geen geldige route (JSON)."; }
+  const lijst = Array.isArray(o) ? o : o.pts;
+  if (!Array.isArray(lijst) || lijst.length < 2 || !lijst.every((q) => Array.isArray(q) && q.length >= 2 && q.slice(0, 2).every((v) => typeof v === "number" && isFinite(v)))) return "De route moet een lijst punten [x, y, radius] zijn, minstens twee.";
+  if (lijst.length > 60) return "Hoogstens 60 punten.";
+  snapshot();
+  const b0 = typeof o.b0 === "number" ? ((o.b0 % 360) + 360) % 360 : S.b0;
+  if (o.modus === "binnen" || o.modus === "buiten") S.modus = o.modus;
+  S.b0 = b0; if (typeof o.power === "number") S.power = Math.max(50, Math.min(MAX_POWER, Math.round(o.power)));
+  if (o.bogen === "vloeiend" || o.bogen === "stukjes") S.bogen = o.bogen;
+  S.pts = [{ x: 0, y: 0, r: 0 }].concat(lijst.slice(1).map((q) => ({ x: +q[0], y: +q[1], r: Math.max(0, +q[2] || 0) })));
+  simT = 0; spelen = false; toon(); sync(true); return null;
+}
+$("vb-laad").onclick = () => { const f = laadRoute($("vb-json").value); $("vb-msg").className = "melding " + (f ? "bad" : "ok"); $("vb-msg").textContent = f || "Route geladen."; if (!f) $("dlg-voorb").close(); };
+$("vb-kopieer").onclick = async () => { const t = routeJson(); $("vb-json").value = t; try { await navigator.clipboard.writeText(t); $("vb-msg").className = "melding ok"; $("vb-msg").textContent = "Route gekopieerd."; } catch { $("vb-msg").className = "melding"; $("vb-msg").textContent = "Selecteer de tekst hierboven en kopieer hem zelf."; } };
+
 /* bewaarde routes */
 const lijst = () => { try { return JSON.parse(localStorage.getItem(LIJST)) || {}; } catch { return {}; } };
 function vulLijst() { const l = lijst(), s = $("s-lijst"); s.innerHTML = ""; for (const n of Object.keys(l)) s.append(new Option(`${n} (${l[n].modus})`, n)); if (!s.options.length) s.append(new Option("nog niets bewaard", "")); }
@@ -695,6 +835,11 @@ function zelftest() {
     const dh = Math.abs(ang(e.h - hLast));
     res.push(`${fout < 0.02 && dh < 0.6 && !p.fouten.length ? "PASS" : "FAIL"} ${naam} b0=${b0}: eind-fout ${fout.toFixed(3)} m, koersfout ${dh.toFixed(2)}°, ${p.stappen.length} stappen`);
   }
+  for (const sj of SJABLONEN) for (const b0 of [0, 137]) {
+    const par = Object.fromEntries(sj.par.map((q) => [q.k, q.d])), pts = sjNaarEnu(sj.maak(par), b0), p = plan(pts, b0, 250), e = volg(p.stappen, b0), last = pts[pts.length - 1];
+    const fout = Math.hypot(e.x - last.x, e.y - last.y), gesloten = ["heen", "vierkant", "rechthoek", "ovaal", "cirkel"].includes(sj.id);
+    res.push(`${fout < 0.02 && !p.fouten.length && (!gesloten || Math.hypot(last.x, last.y) < 0.01) ? "PASS" : "FAIL"} voorbeeld ${sj.naam} b0=${b0}: eind-fout ${fout.toFixed(3)} m, ${p.stappen.length} stappen${p.fouten.length ? ", " + p.fouten[0] : ""}`);
+  }
   const kort = plan([{ x: 0, y: 0, r: 0 }, { x: 0, y: 1, r: 2 }, { x: 3, y: 1, r: 0 }], 0, 250);
   res.push(`${kort.fouten.length ? "PASS" : "FAIL"} te korte stukken worden gemeld`);
   res.push(`${plan([{ x: 0, y: 0, r: 0 }], 0, 250).stappen.length === 0 ? "PASS" : "FAIL"} lege route`);
@@ -745,6 +890,7 @@ if (demo) {
   S.pts = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 3, r: 0.8 }, { x: 3, y: 3, r: 0.6 }, { x: 3, y: 0.5, r: 0 }, { x: 5.5, y: 0.5, r: 0 }];
 }
 toon();
+if (demo === "voorb") { S.modus = "binnen"; toon(); sjCur = SJABLONEN[5]; $("b-voorb").click(); }
 if (demo) { const t = parseFloat(new URLSearchParams(location.search).get("t")); if (t > 0) { simT = Math.min(t, P.tijd); tijdLabel(); $("s-tijd").value = Math.round(simT / P.tijd * 1000); } }
 requestAnimationFrame(lus);
 </script>
