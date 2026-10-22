@@ -69,6 +69,9 @@ button, input, select { font: inherit; color: inherit; }
 .hulp { position: absolute; left: 12px; top: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px;
   box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink-2); max-width: min(380px, 80%); line-height: 1.5; backdrop-filter: blur(6px); }
 .hulp b { color: var(--ink); } kbd { font-family: var(--f-data); font-size: 11px; background: var(--chip); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; }
+.toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); max-width: min(720px, 86%); background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--rule); border-left: 4px solid var(--accent); border-radius: 10px; padding: 8px 14px; box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink-2); line-height: 1.45; backdrop-filter: blur(6px); pointer-events: none; z-index: 5; }
+.toast:empty { display: none; }
 .zweef { position: absolute; right: 12px; top: 12px; display: grid; gap: 6px; }
 .zweef button { width: 36px; height: 36px; border-radius: 9px; border: 1px solid var(--rule); background: var(--surface); box-shadow: var(--shadow); cursor: pointer; font-size: 18px; line-height: 1; }
 .zweef button:hover { background: var(--chip); }
@@ -193,11 +196,11 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <button class="btn ghost" id="b-undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
     <span class="seg" role="group" aria-label="Gereedschap"><button id="t-hand" aria-pressed="false" title="Sleep om de kaart te verschuiven (houd de spatiebalk ingedrukt in elk gereedschap)">✋ Verschuiven</button><button id="t-vrij" aria-pressed="true" title="Houd de muisknop ingedrukt en teken">✎ Tekenen</button><button id="t-punt" aria-pressed="false" title="Klik om punten te zetten">● Punten</button></span>
     <label id="glad-wrap" style="display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px" title="Hoe sterk je lijn wordt vereenvoudigd en afgerond">Gladheid <input type="range" id="i-glad" min="1" max="5" step="1" value="2" style="width:90px;accent-color:var(--accent)" aria-label="Gladheid van de getekende lijn"></label>
+    <span id="hoek-wrap" class="seg" role="group" aria-label="Hoeken" title="Auto: zachte bochten worden bogen, scherpe hoeken een draai ter plaatse"><button id="h-auto" aria-pressed="true">Auto</button><button id="h-rond" aria-pressed="false">Alles rond</button><button id="h-scherp" aria-pressed="false">Scherp</button></span>
     <button class="btn ghost" id="b-wis">Wissen</button>
     <button class="btn" id="b-voorb" style="background:var(--accent-2);border-color:var(--accent-2)">✦ Voorbeelden</button>
     <span class="ruimte"></span>
-    <span class="melding" id="status" role="status"></span>
-    <button class="btn go" id="b-start">Start rit…</button>
+        <button class="btn go" id="b-start">Start rit…</button>
   </div>
   <div class="werk">
     <div class="vlak" id="vlak">
@@ -208,6 +211,7 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
         <b>Liever niet tekenen?</b> <button class="btn" id="b-voorb2" style="padding:3px 10px;margin-top:4px">✦ Kies een voorbeeld</button></div>
       <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
       <div id="kaartmelding" hidden></div>
+      <div id="status" class="toast" role="status"></div>
       <div class="sim">
         <button class="btn rond" id="s-play" aria-label="Simulatie afspelen">▶</button>
         <button class="btn ghost rond" id="s-reset" aria-label="Terug naar het begin">↺</button>
@@ -315,7 +319,7 @@ const ang = (a) => { a = ((a + 180) % 360 + 360) % 360 - 180; return a === -180 
 const KEY = "jaguar-ontwerp-v2", LIJST = "jaguar-routes-v2";
 
 /* ------------------------------------------------------------------ staat */
-const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true, bogen: "stukjes", tool: "vrij", glad: 2,
+const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true, bogen: "stukjes", tool: "vrij", glad: 2, hoeken: "auto",
   view: { cx: 0, cy: 0, ppm: 70 }, kaart: { lat: 50.8418, lon: 4.3230, laag: "osm" } });
 let S = fresh();
 try { const o = JSON.parse(localStorage.getItem(KEY)); if (o && Array.isArray(o.pts) && o.pts.length) S = Object.assign(fresh(), o, { view: Object.assign(fresh().view, o.view), kaart: Object.assign(fresh().kaart, o.kaart) }); } catch {}
@@ -328,7 +332,7 @@ function undo() { const h = hist.pop(); if (!h) return; Object.assign(S, JSON.pa
 // Punten (x oost/rechts, y noord/boven) in meters, pts[0] = start (0,0). pts[i].r = radius van de bocht bij punt i (0 = draaien ter plaatse).
 // Hoeken: wiskundig (graden tegen de klok in, 0 = naar rechts); kompaskoers b0 = 90 − hoek.
 function plan(pts = S.pts, b0 = S.b0, power = S.power) {
-  const out = { stappen: [], poly: [], acties: [], fouten: [], lengte: 0, draaien: 0, bogen: 0, tijd: 0, bbox: null, tl: [] };
+  const out = { stappen: [], poly: [], acties: [], fouten: [], notities: [], lengte: 0, draaien: 0, bogen: 0, tijd: 0, bbox: null, tl: [] };
   const m = pts.length - 1;
   if (m < 1) return out;
   const leg = [];
@@ -336,12 +340,24 @@ function plan(pts = S.pts, b0 = S.b0, power = S.power) {
     const dx = pts[j + 1].x - pts[j].x, dy = pts[j + 1].y - pts[j].y;
     leg.push({ len: Math.hypot(dx, dy), phi: Math.atan2(dy, dx) * DEG, ux: dx, uy: dy });
   }
-  const tg = [], al = [];
-  for (let j = 0; j < m - 1; j++) {
-    const a = ang(leg[j + 1].phi - leg[j].phi), r = pts[j + 1].r || 0;
-    al.push(a);
-    tg.push(r > 0 && Math.abs(a) >= 0.5 && Math.abs(a) < 179.5 ? r * Math.tan(Math.abs(a) * RAD / 2) : 0);
+  const al = [], rE = [];                                   // draaihoek en effectieve radius per bocht
+  for (let j = 0; j < m - 1; j++) { al.push(ang(leg[j + 1].phi - leg[j].phi)); const a = Math.abs(al[j]); rE.push(a >= 0.5 && a < 179.5 ? Math.max(0, pts[j + 1].r || 0) : 0); }
+  const raak = (j) => (rE[j] > 0 ? rE[j] * Math.tan(Math.abs(al[j]) * RAD / 2) : 0);
+  for (let pas = 0; pas < 8; pas++) {                       // past een boog niet tussen twee hoeken, dan wordt hij kleiner
+    let wijzig = false;
+    for (let j = 0; j < m; j++) {
+      const tin = j > 0 ? raak(j - 1) : 0, tout = j < m - 1 ? raak(j) : 0;
+      if (tin + tout > leg[j].len * 0.999 && tin + tout > 0) { const f = leg[j].len * 0.999 / (tin + tout); if (j > 0) rE[j - 1] *= f; if (j < m - 1) rE[j] *= f; wijzig = true; }
+    }
+    if (!wijzig) break;
   }
+  out.notities = [];
+  for (let j = 0; j < m - 1; j++) {
+    const r0 = pts[j + 1].r || 0;
+    if (S.bogen === "vloeiend" && rE[j] > 0 && rE[j] < 0.5) { out.notities.push(`Punt ${j + 1}: de bocht is te klein voor een vloeiende boog (minstens 0,5 m): het robot draait daar ter plaatse.`); rE[j] = 0; }
+    else if (r0 > 0 && rE[j] < r0 * 0.995) out.notities.push(`Punt ${j + 1}: radius verkleind van ${nl(r0)} naar ${nl(rE[j])} m om tussen de stukken te passen.`);
+  }
+  const tg = rE.map((_, j) => raak(j));
   let cur = 90 - b0, x = pts[0].x, y = pts[0].y;
   const v = Math.max(0.05, K_V * power);
   const addTurn = (to) => {
@@ -355,7 +371,6 @@ function plan(pts = S.pts, b0 = S.b0, power = S.power) {
   for (let j = 0; j < m; j++) {
     const tin = j > 0 ? tg[j - 1] : 0, tout = j < m - 1 ? tg[j] : 0;
     let L = leg[j].len - tin - tout;
-    if (L < -1e-6) out.fouten.push(`Stuk ${j + 1} is te kort voor de bogen: ${nl(tin + tout)} m nodig, ${nl(leg[j].len)} m beschikbaar.`);
     L = Math.max(0, L);
     if (!(j > 0 && tg[j - 1] > 0)) addTurn(leg[j].phi);
     if (L > 0.005) {
@@ -365,11 +380,10 @@ function plan(pts = S.pts, b0 = S.b0, power = S.power) {
       x = b.x; y = b.y;
     }
     if (j < m - 1 && tg[j] > 0) {
-      const r = pts[j + 1].r, a = al[j], sign = a > 0 ? 1 : -1;
+      const r = rE[j], a = al[j], sign = a > 0 ? 1 : -1;
       const nx = -Math.sin(leg[j].phi * RAD) * sign, ny = Math.cos(leg[j].phi * RAD) * sign;   // naar het midden
       const cx = x + nx * r, cy = y + ny * r, a0 = Math.atan2(y - cy, x - cx);
       const len = r * Math.abs(a) * RAD;
-      if (S.bogen === "vloeiend" && r < 0.5) out.fouten.push(`Boog bij punt ${j + 1}: radius ${nl(r)} m is te klein voor een vloeiende boog (minstens 0,5 m).`);
       out.stappen.push(["boog", +r.toFixed(3), +a.toFixed(2)]); out.bogen++; out.lengte += len;
       out.acties.push({ k: "boog", cx, cy, r, a0, a, h0: leg[j].phi, len, label: `Boog ${nl(r)} m, ${nl(Math.abs(a), 0)}° ${a > 0 ? "links" : "rechts"}` });
       const ex = cx + r * Math.cos(a0 + a * RAD), ey = cy + r * Math.sin(a0 + a * RAD);
@@ -565,6 +579,7 @@ function sync(fit = false) {
   $("st-draai").textContent = P.stappen.length ? `${P.draaien} · ${P.bogen}` : "–";
   const msg = $("plan-msg"); msg.className = "melding";
   if (P.fouten.length) { msg.classList.add("bad"); msg.textContent = P.fouten[0]; }
+  else if (P.notities.length) { msg.classList.add("warn"); msg.textContent = P.notities.slice(0, 2).join(" ") + (P.notities.length > 2 ? ` (en nog ${P.notities.length - 2})` : ""); }
   else if (P.bogen) { msg.classList.add("warn"); msg.textContent = S.bogen === "vloeiend" ? "Vloeiende bogen zijn nieuw en nog niet op het robot getest: houd de noodstop bij de hand en begin met een ruime boog (radius vanaf 1 m)." : "Bogen worden als korte stukjes van 10° gereden (stap voor stap): veilig maar langzamer dan de simulatie toont."; }
   else msg.textContent = P.stappen.length ? "" : "Nog geen route.";
   stukken(); commando();
@@ -626,8 +641,9 @@ function rdp(q, eps) {                                       // Ramer-Douglas-Pe
   }
   return q.filter((_, i) => keep[i]);
 }
+const HOEK_SCHERP = 50;                                      // graden: scherper dan dit is in Auto een draai ter plaatse
 const hoekTussen = (a, b, c) => { const h1 = Math.atan2(b[1] - a[1], b[0] - a[0]), h2 = Math.atan2(c[1] - b[1], c[0] - b[0]); return Math.abs(ang((h2 - h1) * DEG)); };
-function streekNaarPunten(raw, glad, ppm) {
+function streekNaarPunten(raw, glad, ppm, hoeken = "auto") {
   // 1. gladstrijken (voortschrijdend gemiddelde, begin en eind blijven staan)
   const w = 2, sm = raw.map((q, i) => { if (i === 0 || i === raw.length - 1) return q.slice(); let sx = 0, sy = 0, n = 0;
     for (let k = Math.max(0, i - w); k <= Math.min(raw.length - 1, i + w); k++) { sx += raw[k][0]; sy += raw[k][1]; n++; } return [sx / n, sy / n]; });
@@ -649,12 +665,14 @@ function streekNaarPunten(raw, glad, ppm) {
   for (let i = 1; i < pts.length - 1; i++) {
     const a = pts[i - 1], b = pts[i], c = pts[i + 1], alpha = hoekTussen([a.x, a.y], [b.x, b.y], [c.x, c.y]) * RAD;
     if (alpha < 0.01 || alpha > 3.1) continue;
+    // Auto: een zachte bocht wordt een boog, een scherpe hoek een draai ter plaatse. Rond: altijd een boog. Scherp: nooit.
+    if (hoeken === "scherp" || (hoeken === "auto" && alpha * DEG >= HOEK_SCHERP)) continue;
     const tmax = 0.5 * Math.min(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(c.x - b.x, c.y - b.y)), rfit = tmax / Math.tan(alpha / 2), r = Math.min(10, rfit);
     b.r = r >= 0.3 ? +(r * 0.98).toFixed(2) : 0;
   }
   return pts;
 }
-function pasStreekToe(raw, glad = S.glad, basis = null, ppm = S.view.ppm) {
+function pasStreekToe(raw, glad = S.glad, basis = null, ppm = S.view.ppm, hoeken = S.hoeken) {
   if (raw.length < 2) return null;
   let lengte = 0; for (let i = 1; i < raw.length; i++) lengte += Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]);
   if (lengte < 0.3) return null;
@@ -665,7 +683,7 @@ function pasStreekToe(raw, glad = S.glad, basis = null, ppm = S.view.ppm) {
   if (aansluit) lijn[0] = [laatste.x, laatste.y];            // verder tekenen vanaf het laatste punt
   else if (Math.hypot(raw[0][0], raw[0][1]) < naBij) lijn[0] = [0, 0];                    // begonnen bij de start
   else lijn = [[0, 0]].concat(lijn);                           // elders begonnen: eerst recht naar het begin van de lijn
-  const nieuw = streekNaarPunten(lijn, glad, ppm);
+  const nieuw = streekNaarPunten(lijn, glad, ppm, hoeken);
   if (aansluit) return basis.concat(nieuw.slice(1));
   nieuw[0].r = 0; return nieuw;
 }
@@ -685,12 +703,14 @@ function afwijking(raw) {                                      // grootste afsta
 }
 function opnieuwPassen() {                                    // gladheid veranderd: dezelfde lijn opnieuw vereenvoudigen
   if (!S.tekening) return;
-  const t = S.tekening, pts = pasStreekToe(t.raw, S.glad, t.basis, t.ppm); if (!pts) return;
+  const t = S.tekening, pts = pasStreekToe(t.raw, S.glad, t.basis, t.ppm, S.hoeken); if (!pts) return;
   S.pts = pts; S.tekening = t; simT = 0; spelen = false; sync();
 }
 function toonGereedschap() {
   for (const [id, w] of [["t-hand", "hand"], ["t-vrij", "vrij"], ["t-punt", "punten"]]) $(id).setAttribute("aria-pressed", S.tool === w);
   $("glad-wrap").style.display = S.tool === "vrij" ? "inline-flex" : "none"; $("i-glad").value = S.glad;
+  $("hoek-wrap").style.display = S.tool === "vrij" ? "inline-flex" : "none";
+  for (const [id, w] of [["h-auto", "auto"], ["h-rond", "rond"], ["h-scherp", "scherp"]]) $(id).setAttribute("aria-pressed", S.hoeken === w);
   $("hulp-vrij").hidden = S.tool !== "vrij"; $("hulp-punt").hidden = S.tool !== "punten"; $("hulp-hand").hidden = S.tool !== "hand";
   cv.className = S.tool === "hand" ? "grab" : "";
 }
@@ -700,6 +720,7 @@ addEventListener("keyup", (e) => { if (e.code === "Space") { spatie = false; cv.
 $("t-hand").onclick = () => { S.tool = "hand"; toonGereedschap(); bewaar(); };
 $("t-vrij").onclick = () => { S.tool = "vrij"; toonGereedschap(); bewaar(); };
 $("t-punt").onclick = () => { S.tool = "punten"; toonGereedschap(); bewaar(); };
+for (const [id, w] of [["h-auto", "auto"], ["h-rond", "rond"], ["h-scherp", "scherp"]]) $(id).onclick = () => { S.hoeken = w; toonGereedschap(); opnieuwPassen(); bewaar(); };
 $("i-glad").oninput = () => { S.glad = +$("i-glad").value; opnieuwPassen(); bewaar(); };
 
 /* muis en aanraking */
@@ -937,8 +958,10 @@ function zelftest() {
     const fout = Math.hypot(e.x - last.x, e.y - last.y), gesloten = ["heen", "vierkant", "rechthoek", "ovaal", "cirkel"].includes(sj.id);
     res.push(`${fout < 0.02 && !p.fouten.length && (!gesloten || Math.hypot(last.x, last.y) < 0.01) ? "PASS" : "FAIL"} voorbeeld ${sj.naam} b0=${b0}: eind-fout ${fout.toFixed(3)} m, ${p.stappen.length} stappen${p.fouten.length ? ", " + p.fouten[0] : ""}`);
   }
-  const kort = plan([{ x: 0, y: 0, r: 0 }, { x: 0, y: 1, r: 2 }, { x: 3, y: 1, r: 0 }], 0, 250);
-  res.push(`${kort.fouten.length ? "PASS" : "FAIL"} te korte stukken worden gemeld`);
+  const kort = plan([{ x: 0, y: 0, r: 0 }, { x: 0, y: 1, r: 2 }, { x: 3, y: 1, r: 0 }], 0, 250), ek = volg(kort.stappen, 0);
+  res.push(`${!kort.fouten.length && kort.notities.length && Math.hypot(ek.x - 3, ek.y - 1) < 0.02 ? "PASS" : "FAIL"} een te grote radius wordt vanzelf verkleind (geen fout), de route eindigt toch goed`);
+  const strak = plan([{ x: 0, y: 0, r: 0 }, { x: 0, y: 1, r: 0.5 }, { x: 0.3, y: 1.2, r: 0.5 }, { x: 0.3, y: 2, r: 0 }], 0, 250), es = volg(strak.stappen, 0);
+  res.push(`${!strak.fouten.length && Math.hypot(es.x - 0.3, es.y - 2) < 0.02 ? "PASS" : "FAIL"} dicht op elkaar liggende bochten passen zich aan (eindfout ${Math.hypot(es.x - 0.3, es.y - 2).toFixed(3)} m)`);
   res.push(`${plan([{ x: 0, y: 0, r: 0 }], 0, 250).stappen.length === 0 ? "PASS" : "FAIL"} lege route`);
   document.title = res.every((r) => r.startsWith("PASS")) ? "ZELFTEST OK" : "ZELFTEST FOUT";
   const pre = document.createElement("pre"); pre.id = "zelftest"; pre.textContent = res.join(String.fromCharCode(10)); document.body.append(pre);
@@ -950,7 +973,7 @@ function interactietest() {
   const res = [];
   S = fresh(); S.modus = "binnen"; S.tool = "punten"; toon(); resize();
   const r = cv.getBoundingClientRect();
-  const ev = (type, x, y, extra = {}) => cv.dispatchEvent(new PointerEvent(type, Object.assign({ clientX: r.left + x, clientY: r.top + y, button: 0, pointerId: 1, bubbles: true }, extra)));
+  const ev = (type, x, y, extra = {}) => { const q = cv.getBoundingClientRect(); cv.dispatchEvent(new PointerEvent(type, Object.assign({ clientX: q.left + x, clientY: q.top + y, button: 0, pointerId: 1, bubbles: true }, extra))); };
   const klik = (wx, wy) => { const [sx, sy] = toS(wx, wy); ev("pointerdown", sx, sy); ev("pointerup", sx, sy); };
   const ok = (c, t) => res.push(`${c ? "PASS" : "FAIL"} ${t}`);
   S.view = { cx: 1.5, cy: 1.5, ppm: 80 };
@@ -967,7 +990,7 @@ function interactietest() {
   // ongedaan
   undo(); ok(Math.abs(S.pts[2].x - 2) < 0.06, "ongedaan maken zet het punt terug");
   // weghalen met rechtermuisknop
-  const [e1, e2] = toS(S.pts[3].x, S.pts[3].y); cv.dispatchEvent(new MouseEvent("contextmenu", { clientX: r.left + e1, clientY: r.top + e2, bubbles: true, cancelable: true }));
+  const [e1, e2] = toS(S.pts[3].x, S.pts[3].y), qq = cv.getBoundingClientRect(); cv.dispatchEvent(new MouseEvent("contextmenu", { clientX: qq.left + e1, clientY: qq.top + e2, bubbles: true, cancelable: true }));
   ok(S.pts.length === 3, "rechtermuisknop haalt een punt weg");
   // richting draaien met het oranje handvat: naar rechts = kompaskoers 90
   teken(); const [hx, hy] = [handle.x, handle.y], [s0x, s0y] = toS(0, 0);
@@ -985,7 +1008,10 @@ function interactietest() {
     const L = []; for (let y = 0; y <= 3; y += 0.05) L.push([0.02 * Math.sin(y * 40), y]); for (let x = 0.05; x <= 3; x += 0.05) L.push([x, 3 + 0.02 * Math.sin(x * 40)]);
     teken(L);
     ok(S.pts.length >= 3 && S.pts.length <= 4, `getekende L wordt ${S.pts.length - 1} punten`);
-    ok(S.pts.some((p, i) => i > 0 && i < S.pts.length - 1 && p.r > 0), "de hoek krijgt vanzelf een radius");
+    ok(!S.pts.some((p, i) => i > 0 && i < S.pts.length - 1 && p.r > 0), "Auto: een scherpe hoek van 90° blijft een draai ter plaatse ");
+    S.hoeken = "rond"; opnieuwPassen(); ok(S.pts.some((p, i) => i > 0 && i < S.pts.length - 1 && p.r > 0), "Alles rond: dezelfde hoek krijgt een radius");
+    S.hoeken = "scherp"; opnieuwPassen(); ok(!S.pts.some((p) => p.r > 0), "Scherp: nooit een radius");
+    S.hoeken = "auto"; opnieuwPassen();
     ok(Math.abs(S.pts[S.pts.length - 1].x - 3) < 0.15 && Math.abs(S.pts[S.pts.length - 1].y - 3) < 0.15, `eindpunt (${S.pts[S.pts.length - 1].x.toFixed(2)}, ${S.pts[S.pts.length - 1].y.toFixed(2)})`);
     ok(!P.fouten.length, "geen fouten in het plan");
     S.glad = 5; opnieuwPassen(); ok(S.pts.length <= 4, "gladheid werkt opnieuw op dezelfde lijn");
