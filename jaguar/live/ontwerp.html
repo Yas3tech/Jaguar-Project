@@ -191,7 +191,7 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <button class="btn ghost" id="b-terug">← Kiezen</button>
     <h1>Parcours <span class="badge" id="badge">Binnen</span></h1>
     <button class="btn ghost" id="b-undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
-    <span class="seg" role="group" aria-label="Gereedschap"><button id="t-vrij" aria-pressed="true" title="Houd de muisknop ingedrukt en teken">✎ Tekenen</button><button id="t-punt" aria-pressed="false" title="Klik om punten te zetten">● Punten</button></span>
+    <span class="seg" role="group" aria-label="Gereedschap"><button id="t-hand" aria-pressed="false" title="Sleep om de kaart te verschuiven (houd de spatiebalk ingedrukt in elk gereedschap)">✋ Verschuiven</button><button id="t-vrij" aria-pressed="true" title="Houd de muisknop ingedrukt en teken">✎ Tekenen</button><button id="t-punt" aria-pressed="false" title="Klik om punten te zetten">● Punten</button></span>
     <label id="glad-wrap" style="display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px" title="Hoe sterk je lijn wordt vereenvoudigd en afgerond">Gladheid <input type="range" id="i-glad" min="1" max="5" step="1" value="2" style="width:90px;accent-color:var(--accent)" aria-label="Gladheid van de getekende lijn"></label>
     <button class="btn ghost" id="b-wis">Wissen</button>
     <button class="btn" id="b-voorb" style="background:var(--accent-2);border-color:var(--accent-2)">✦ Voorbeelden</button>
@@ -203,6 +203,7 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <div class="vlak" id="vlak">
       <canvas id="cv" aria-label="Tekenvlak voor het parcours"></canvas>
       <div class="hulp" id="hulp"><span id="hulp-vrij"><b>Houd de muisknop ingedrukt en teken</b> vanaf de groene start. Laat los: de punten en bogen worden vanzelf gezet. <kbd>Alt</kbd> + slepen = het beeld schuiven · wiel = zoomen.</span>
+        <span id="hulp-hand"><b>Sleep</b> om de kaart te verschuiven · wiel = zoomen. Kies ✎ Tekenen om weer te tekenen.</span>
         <span id="hulp-punt"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen · rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</span><br>
         <b>Liever niet tekenen?</b> <button class="btn" id="b-voorb2" style="padding:3px 10px;margin-top:4px">✦ Kies een voorbeeld</button></div>
       <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
@@ -688,10 +689,15 @@ function opnieuwPassen() {                                    // gladheid verand
   S.pts = pts; S.tekening = t; simT = 0; spelen = false; sync();
 }
 function toonGereedschap() {
-  for (const [id, w] of [["t-vrij", "vrij"], ["t-punt", "punten"]]) $(id).setAttribute("aria-pressed", S.tool === w);
+  for (const [id, w] of [["t-hand", "hand"], ["t-vrij", "vrij"], ["t-punt", "punten"]]) $(id).setAttribute("aria-pressed", S.tool === w);
   $("glad-wrap").style.display = S.tool === "vrij" ? "inline-flex" : "none"; $("i-glad").value = S.glad;
-  $("hulp-vrij").hidden = S.tool !== "vrij"; $("hulp-punt").hidden = S.tool === "vrij";
+  $("hulp-vrij").hidden = S.tool !== "vrij"; $("hulp-punt").hidden = S.tool !== "punten"; $("hulp-hand").hidden = S.tool !== "hand";
+  cv.className = S.tool === "hand" ? "grab" : "";
 }
+let spatie = false;
+addEventListener("keydown", (e) => { if (e.code === "Space" && !e.target.closest("input, select, textarea, button") && !$("ontwerp").hidden) { e.preventDefault(); if (!spatie) { spatie = true; cv.className = "grab"; } } });
+addEventListener("keyup", (e) => { if (e.code === "Space") { spatie = false; cv.className = S.tool === "hand" ? "grab" : ""; } });
+$("t-hand").onclick = () => { S.tool = "hand"; toonGereedschap(); bewaar(); };
 $("t-vrij").onclick = () => { S.tool = "vrij"; toonGereedschap(); bewaar(); };
 $("t-punt").onclick = () => { S.tool = "punten"; toonGereedschap(); bewaar(); };
 $("i-glad").oninput = () => { S.glad = +$("i-glad").value; opnieuwPassen(); bewaar(); };
@@ -704,6 +710,7 @@ function raak(sx, sy) { for (let i = S.pts.length - 1; i >= 1; i--) { const [px,
 cv.addEventListener("pointerdown", (e) => {
   if (e.button === 2) return; try { cv.setPointerCapture(e.pointerId); } catch {}
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (S.tool === "hand" || spatie || e.button === 1) { drag = { k: "pan", sx, sy, cx: S.view.cx, cy: S.view.cy, bewogen: false }; cv.className = "pan"; return; }
   if (Math.hypot(handle.x - sx, handle.y - sy) < 13) { drag = { k: "richting" }; snapshot(); cv.className = "draai"; return; }
   const i = raak(sx, sy);
   if (i > 0) { drag = { k: "punt", i }; snapshot(); return; }
@@ -712,7 +719,7 @@ cv.addEventListener("pointerdown", (e) => {
 });
 cv.addEventListener("pointermove", (e) => {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-  if (!drag) { cv.className = Math.hypot(handle.x - sx, handle.y - sy) < 13 ? "draai" : raak(sx, sy) > 0 ? "grab" : ""; return; }
+  if (!drag) { if (S.tool === "hand" || spatie) { cv.className = "grab"; return; } cv.className = Math.hypot(handle.x - sx, handle.y - sy) < 13 ? "draai" : raak(sx, sy) > 0 ? "grab" : ""; return; }
   if (drag.k === "richting") { const [wx, wy] = toW(sx, sy); let b = Math.atan2(wx, wy) * DEG; b = (b + 360) % 360;
     if (snapOn(e)) { const st = S.modus === "binnen" ? 90 : 5; b = (Math.round(b / st) * st) % 360; } S.b0 = b; $("i-b0").value = Math.round(b); for (const x of document.querySelectorAll("[data-b0]")) x.setAttribute("aria-pressed", +x.dataset.b0 === Math.round(b)); sync(); }
   else if (drag.k === "punt") { const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e); S.pts[drag.i].x = qx; S.pts[drag.i].y = qy; sync(); }
@@ -722,11 +729,11 @@ cv.addEventListener("pointermove", (e) => {
 cv.addEventListener("pointerup", (e) => {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
   if (drag && drag.k === "teken") { const raw = drag.raw; drag = null; cv.className = ""; dirty = true; streekKlaar(raw); return; }
-  if (drag && drag.k === "pan" && !drag.bewogen && S.tool !== "vrij") {                      // klik zonder slepen = punt toevoegen
+  if (drag && drag.k === "pan" && !drag.bewogen && S.tool === "punten" && !spatie && e.button !== 1) {                      // klik zonder slepen = punt toevoegen
     const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e), last = S.pts[S.pts.length - 1];
     if (Math.hypot(qx - last.x, qy - last.y) > 0.04) { snapshot(); S.pts.push({ x: qx, y: qy, r: 0 }); sync(); }
   }
-  drag = null; cv.className = "";
+  drag = null; cv.className = S.tool === "hand" || spatie ? "grab" : "";
 });
 cv.addEventListener("contextmenu", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), i = raak(e.clientX - r.left, e.clientY - r.top); if (i > 0) { snapshot(); S.pts.splice(i, 1); sync(); } });
 cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top, [wx, wy] = toW(sx, sy);
@@ -968,6 +975,10 @@ function interactietest() {
   ok(Math.round(S.b0) === 90, `richting naar rechts = ${Math.round(S.b0)}°`);
   ok(P.stappen[0][0] === "vooruit" || P.stappen[0][0] === "links" || P.stappen[0][0] === "rechts", "plan is opnieuw berekend");
   try {
+  // hand: sleept de kaart en zet geen punt
+  S.tool = "hand"; toonGereedschap(); { const n0 = S.pts.length, cx0 = S.view.cx; ev("pointerdown", 200, 200); ev("pointermove", 260, 200); ev("pointerup", 260, 200);
+    ok(S.pts.length === n0 && S.view.cx < cx0 - 0.1, "hand: sleept de kaart zonder een punt te zetten");
+    ev("pointerdown", 300, 300); ev("pointerup", 300, 300); ok(S.pts.length === n0, "hand: een klik zet geen punt"); }
   // vrij tekenen: een L-vorm met de muis trekken
   S.pts = [{ x: 0, y: 0, r: 0 }]; S.tool = "vrij"; S.view = { cx: 1.5, cy: 1.5, ppm: 80 }; S.b0 = 0; toonGereedschap(); sync();
   { const teken = (lijst) => { const [a0, b0_] = toS(...lijst[0]); ev("pointerdown", a0, b0_); for (const q of lijst.slice(1)) { const [a, b] = toS(...q); ev("pointermove", a, b); } const [a1, b1] = toS(...lijst[lijst.length - 1]); ev("pointerup", a1, b1); };
