@@ -12,6 +12,7 @@ Jaguar-Project/
 │  ├─ kern/             robot.py (verbinding, motoren) en odometrie.py (afstand, koers, slip)
 │  ├─ rijden/           rechtdoor, heen_en_terug, parcours en bediening (rijden vanuit de browser)
 │  ├─ analyse/          rit.py: een rit achteraf analyseren en het dashboard maken
+│  ├─ navigatie/        GPS: coördinaten naar meters, het noorden, een route van GPS-punten rijden
 │  ├─ kalibratie/       kalibreer.py en test_sondewiel.py: wielstraal en gyroschaal meten
 │  ├─ live/             de live webpagina (view.py, pagina.html, opties.json, mqtt_stream.py)
 │  └─ testen/           nep_robot.py: de nep-robot
@@ -154,3 +155,12 @@ Opbouw, van eenvoudig naar technisch:
 Totale afstand telt alle bewegingen op, ook de kleine kruipstoten heen en weer bij het stoppen. Getekende verplaatsing trekt terugrijden af. De baan combineert de afgelegde weg met de gyrokoers; geen GPS-positie.
 
 CSV bevat tijd, fase, motoropdracht en ruwe sensorregel. Zonder CSV kan achteraf geen nieuw dashboard worden berekend. Analyse vereist IMU, rustfase en encoders van beide motordrivers.
+
+## GPS-route
+
+```powershell
+python -m jaguar.rijden.gps_route 50.8400000,4.3200000 50.8400449,4.3200000 50.8400449,4.3200710 --richting 0 --droog
+python -m jaguar.rijden.gps_route <lat,lon> <lat,lon> ... --kalibreer-noord 8
+```
+
+Het eerste punt is het startpunt (nulpunt). De route zelf wordt gereden met wielen en gyro; het GPS (3 à 15 m, binnen onbruikbaar) dient alleen voor het noorden en voor een absolute positie die telt als hij betrouwbaar is. Uitleg in [jaguar/navigatie/](jaguar/navigatie/README.md).

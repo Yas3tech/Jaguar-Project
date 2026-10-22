@@ -8,3 +8,4 @@
 | `bediening.py` | Hetzelfde vanuit de browser, met een knop Rijden en STOP: `python -m jaguar.rijden.bediening` |
 
 Elke rit slaat een CSV op in `ritten/`. Alle scripts hebben `--no-csv`, `--no-live`, `--ip` en `--mqtt`. Met `--ip 127.0.0.1` rijd je tegen de nep-robot.
+- `gps_route.py`: een route rijden die uit GPS-coördinaten bestaat (`--richting` of `--kalibreer-noord`, `--droog` om alleen het plan te tonen). Zie [navigatie/](../navigatie/README.md).

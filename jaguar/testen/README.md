@@ -7,3 +7,4 @@ python -m jaguar.testen.nep_robot
 python -m jaguar.rijden.rechtdoor --ip 127.0.0.1 --duration 5 --no-csv
 ```
 De nep-robot speelt altijd dezelfde opname af, dus rijden op afstand reageert niet echt.
+- `test_navigatie.py`: controles voor de GPS-omrekening, het noorden en het anker, zonder robot (`python -m jaguar.testen.test_navigatie`).

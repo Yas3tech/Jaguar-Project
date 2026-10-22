@@ -27,6 +27,7 @@ import time
 
 from jaguar.analyse.rit import M_PER_CNT, WHEEL_R, WHEEL_DIS, GYRO_LSB_DPS, ACC_LSB_G
 from jaguar.kern.odometrie import Odometrie
+from jaguar.navigatie.gps import parse_rmc
 
 ROBOT_IP = "192.168.0.60"
 ROBOT_PORT = 10001
@@ -143,6 +144,7 @@ class Jaguar:
         local = ip in ("127.0.0.1", "localhost")
         self.driver = (not local and not achter_vrij and os.environ.get("JAGUAR_DRIVER") != "0") if driver is None else driver
         self._acks = {"MM0": 0, "MM1": 0}
+        self.gps_hook = None             # functie(gps, koers, draaisnelheid, x, y) voor elke GPS-zin (jaguar/navigatie)
         self._echo = {}                  # laatste commando zoals de driver het ontving (hij herhaalt het in zijn logregel)
         self._cfg = {}                   # "MM0 KP" -> [kanaal1, kanaal2]
         self._driver_gewijzigd = False
@@ -195,6 +197,11 @@ class Jaguar:
         self.note(line)
         if self.live is not None:
             self.live.feed(time.perf_counter() - self.t0, self.phase, self.power, line)
+        if line.startswith("$GPRMC") and self.gps_hook is not None:
+            gps = parse_rmc(line)
+            if gps:
+                self.gps_hook(gps, self.odo.koers, self.odo.draaisnelheid, self.odo.x, self.odo.y)
+            return
         if line.startswith("#"):
             p = line.split(",")
             if len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
