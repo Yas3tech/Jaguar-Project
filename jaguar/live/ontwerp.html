@@ -191,6 +191,8 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
     <button class="btn ghost" id="b-terug">← Kiezen</button>
     <h1>Parcours <span class="badge" id="badge">Binnen</span></h1>
     <button class="btn ghost" id="b-undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
+    <span class="seg" role="group" aria-label="Gereedschap"><button id="t-vrij" aria-pressed="true" title="Houd de muisknop ingedrukt en teken">✎ Tekenen</button><button id="t-punt" aria-pressed="false" title="Klik om punten te zetten">● Punten</button></span>
+    <label id="glad-wrap" style="display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px" title="Hoe sterk je lijn wordt vereenvoudigd en afgerond">Gladheid <input type="range" id="i-glad" min="1" max="5" step="1" value="2" style="width:90px;accent-color:var(--accent)" aria-label="Gladheid van de getekende lijn"></label>
     <button class="btn ghost" id="b-wis">Wissen</button>
     <button class="btn" id="b-voorb" style="background:var(--accent-2);border-color:var(--accent-2)">✦ Voorbeelden</button>
     <span class="ruimte"></span>
@@ -200,8 +202,8 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
   <div class="werk">
     <div class="vlak" id="vlak">
       <canvas id="cv" aria-label="Tekenvlak voor het parcours"></canvas>
-      <div class="hulp" id="hulp"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen ·
-        rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken<br>
+      <div class="hulp" id="hulp"><span id="hulp-vrij"><b>Houd de muisknop ingedrukt en teken</b> vanaf de groene start. Laat los: de punten en bogen worden vanzelf gezet. <kbd>Alt</kbd> + slepen = het beeld schuiven · wiel = zoomen.</span>
+        <span id="hulp-punt"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen · rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</span><br>
         <b>Liever niet tekenen?</b> <button class="btn" id="b-voorb2" style="padding:3px 10px;margin-top:4px">✦ Kies een voorbeeld</button></div>
       <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
       <div id="kaartmelding" hidden></div>
@@ -312,13 +314,13 @@ const ang = (a) => { a = ((a + 180) % 360 + 360) % 360 - 180; return a === -180 
 const KEY = "jaguar-ontwerp-v2", LIJST = "jaguar-routes-v2";
 
 /* ------------------------------------------------------------------ staat */
-const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true, bogen: "stukjes",
+const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true, bogen: "stukjes", tool: "vrij", glad: 2,
   view: { cx: 0, cy: 0, ppm: 70 }, kaart: { lat: 50.8418, lon: 4.3230, laag: "osm" } });
 let S = fresh();
 try { const o = JSON.parse(localStorage.getItem(KEY)); if (o && Array.isArray(o.pts) && o.pts.length) S = Object.assign(fresh(), o, { view: Object.assign(fresh().view, o.view), kaart: Object.assign(fresh().kaart, o.kaart) }); } catch {}
 let hist = [];
 const bewaar = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
-const snapshot = () => { hist.push(JSON.stringify({ pts: S.pts, b0: S.b0 })); if (hist.length > 80) hist.shift(); };
+const snapshot = () => { S.tekening = null; hist.push(JSON.stringify({ pts: S.pts, b0: S.b0 })); if (hist.length > 80) hist.shift(); };
 function undo() { const h = hist.pop(); if (!h) return; Object.assign(S, JSON.parse(h)); sync(); }
 
 /* --------------------------------------------------------------- planning */
@@ -507,6 +509,9 @@ function teken() {
       for (let i = 0; i <= 20; i++) { const q = e.f(u * i / 20); const [sx, sy] = toS(q.x, q.y); started ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); started = true; } }
     ctx.stroke();
   }
+  // lijn die je nu tekent
+  if (drag && drag.k === "teken" && drag.raw.length > 1) { ctx.strokeStyle = css("--accent-2"); ctx.globalAlpha = .9; ctx.lineWidth = 3; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath();
+    drag.raw.forEach((q, i) => { const [sx, sy] = toS(q[0], q[1]); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.stroke(); ctx.globalAlpha = 1; }
   // punten
   for (let i = 0; i < pts.length; i++) {
     const [sx, sy] = toS(pts[i].x, pts[i].y);
@@ -548,7 +553,7 @@ function toon() {
   for (const b of document.querySelectorAll("[data-b0]")) b.setAttribute("aria-pressed", +b.dataset.b0 === Math.round(S.b0));
   $("c-breed").checked = S.breed; $("i-pw").value = S.power;
   $("g-stuk").setAttribute("aria-pressed", S.bogen !== "vloeiend"); $("g-vloeiend").setAttribute("aria-pressed", S.bogen === "vloeiend");
-  $("hulp").hidden = S.pts.length > 2;
+  $("hulp").hidden = S.pts.length > 2; toonGereedschap();
   resize(); sync(true);
 }
 function sync(fit = false) {
@@ -609,6 +614,88 @@ function boogStappen(r, a, mx = 10) {                // zelfde als jaguar/naviga
   for (let i = 0; i < n; i++) { o.push(["vooruit", ak]); o.push([kant, i < n - 1 ? Math.abs(d) : Math.abs(d) / 2]); } return o;
 }
 
+/* ------------------------------------------------ vrij tekenen: lijn -> punten en bogen */
+function rdp(q, eps) {                                       // Ramer-Douglas-Peucker
+  if (q.length < 3) return q.slice();
+  const keep = new Uint8Array(q.length); keep[0] = keep[q.length - 1] = 1; const stack = [[0, q.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop(); let dmax = 0, idx = -1; const [ax, ay] = q[a], [bx, by] = q[b], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1e-9;
+    for (let i = a + 1; i < b; i++) { const d = Math.abs(dy * (q[i][0] - ax) - dx * (q[i][1] - ay)) / L; if (d > dmax) { dmax = d; idx = i; } }
+    if (dmax > eps && idx > 0) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
+  }
+  return q.filter((_, i) => keep[i]);
+}
+const hoekTussen = (a, b, c) => { const h1 = Math.atan2(b[1] - a[1], b[0] - a[0]), h2 = Math.atan2(c[1] - b[1], c[0] - b[0]); return Math.abs(ang((h2 - h1) * DEG)); };
+function streekNaarPunten(raw, glad, ppm) {
+  // 1. gladstrijken (voortschrijdend gemiddelde, begin en eind blijven staan)
+  const w = 2, sm = raw.map((q, i) => { if (i === 0 || i === raw.length - 1) return q.slice(); let sx = 0, sy = 0, n = 0;
+    for (let k = Math.max(0, i - w); k <= Math.min(raw.length - 1, i + w); k++) { sx += raw[k][0]; sy += raw[k][1]; n++; } return [sx / n, sy / n]; });
+  // 2. vereenvoudigen: hoeveel mag de lijn afwijken (in beeldpunten, dus meters naar het zoomniveau)
+  const eps = Math.max(0.04, (3 + 3 * glad) / ppm);
+  let v = rdp(sm, eps);
+  // 3. bijna rechte hoekpunten en te korte stukken weghalen
+  for (let ronde = 0; ronde < 4; ronde++) {
+    const nieuw = [v[0]];
+    for (let i = 1; i < v.length - 1; i++) {
+      const vorig = nieuw[nieuw.length - 1];
+      if (hoekTussen(vorig, v[i], v[i + 1]) < 4 * (1 + 0.15 * glad) || Math.hypot(v[i][0] - vorig[0], v[i][1] - vorig[1]) < Math.max(0.2, eps * 0.8)) continue;
+      nieuw.push(v[i]);
+    }
+    nieuw.push(v[v.length - 1]); if (nieuw.length === v.length) break; v = nieuw;
+  }
+  // 4. radius per hoek: zo groot als past, hoogstens de helft van elk aangrenzend stuk
+  const pts = v.map((q) => ({ x: +q[0].toFixed(3), y: +q[1].toFixed(3), r: 0 }));
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1], alpha = hoekTussen([a.x, a.y], [b.x, b.y], [c.x, c.y]) * RAD;
+    if (alpha < 0.01 || alpha > 3.1) continue;
+    const tmax = 0.5 * Math.min(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(c.x - b.x, c.y - b.y)), rfit = tmax / Math.tan(alpha / 2), r = Math.min(10, rfit);
+    b.r = r >= 0.3 ? +(r * 0.98).toFixed(2) : 0;
+  }
+  return pts;
+}
+function pasStreekToe(raw, glad = S.glad, basis = null, ppm = S.view.ppm) {
+  if (raw.length < 2) return null;
+  let lengte = 0; for (let i = 1; i < raw.length; i++) lengte += Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]);
+  if (lengte < 0.3) return null;
+  const naBij = 30 / ppm;                                   // 30 beeldpunten
+  const laatste = basis && basis.length > 1 ? basis[basis.length - 1] : null;
+  const aansluit = laatste && Math.hypot(raw[0][0] - laatste.x, raw[0][1] - laatste.y) < naBij;
+  let lijn = raw.map((q) => q.slice());
+  if (aansluit) lijn[0] = [laatste.x, laatste.y];            // verder tekenen vanaf het laatste punt
+  else if (Math.hypot(raw[0][0], raw[0][1]) < naBij) lijn[0] = [0, 0];                    // begonnen bij de start
+  else lijn = [[0, 0]].concat(lijn);                           // elders begonnen: eerst recht naar het begin van de lijn
+  const nieuw = streekNaarPunten(lijn, glad, ppm);
+  if (aansluit) return basis.concat(nieuw.slice(1));
+  nieuw[0].r = 0; return nieuw;
+}
+function streekKlaar(raw) {
+  const basis = S.pts.length > 1 ? S.pts.map((p) => ({ x: p.x, y: p.y, r: p.r })) : null;
+  const pts = pasStreekToe(raw, S.glad, basis);
+  if (!pts) { melding("Te kort: teken een langere lijn vanaf de groene start."); return; }
+  snapshot(); S.pts = pts; S.tekening = { raw, basis, ppm: S.view.ppm };
+  simT = 0; spelen = false; sync();
+  melding(`${pts.length - 1} punten gezet, de route wijkt hoogstens ${nl(afwijking(raw), 2)} m van je lijn af. Verander de gladheid of sleep de punten om bij te stellen.`);
+}
+function afwijking(raw) {                                      // grootste afstand van je lijn tot de gereden route
+  const q = P.poly; if (q.length < 2) return 0; let m = 0;
+  for (const [x, y] of raw) { let d = Infinity; for (let i = 1; i < q.length; i++) { const ax = q[i - 1].x, ay = q[i - 1].y, bx = q[i].x - ax, by = q[i].y - ay, L2 = bx * bx + by * by || 1e-9;
+      const t = Math.max(0, Math.min(1, ((x - ax) * bx + (y - ay) * by) / L2)); d = Math.min(d, Math.hypot(x - ax - t * bx, y - ay - t * by)); } m = Math.max(m, d); }
+  return m;
+}
+function opnieuwPassen() {                                    // gladheid veranderd: dezelfde lijn opnieuw vereenvoudigen
+  if (!S.tekening) return;
+  const t = S.tekening, pts = pasStreekToe(t.raw, S.glad, t.basis, t.ppm); if (!pts) return;
+  S.pts = pts; S.tekening = t; simT = 0; spelen = false; sync();
+}
+function toonGereedschap() {
+  for (const [id, w] of [["t-vrij", "vrij"], ["t-punt", "punten"]]) $(id).setAttribute("aria-pressed", S.tool === w);
+  $("glad-wrap").style.display = S.tool === "vrij" ? "inline-flex" : "none"; $("i-glad").value = S.glad;
+  $("hulp-vrij").hidden = S.tool !== "vrij"; $("hulp-punt").hidden = S.tool === "vrij";
+}
+$("t-vrij").onclick = () => { S.tool = "vrij"; toonGereedschap(); bewaar(); };
+$("t-punt").onclick = () => { S.tool = "punten"; toonGereedschap(); bewaar(); };
+$("i-glad").oninput = () => { S.glad = +$("i-glad").value; opnieuwPassen(); bewaar(); };
+
 /* muis en aanraking */
 let drag = null;
 const snapOn = (e) => !e.shiftKey;
@@ -620,6 +707,7 @@ cv.addEventListener("pointerdown", (e) => {
   if (Math.hypot(handle.x - sx, handle.y - sy) < 13) { drag = { k: "richting" }; snapshot(); cv.className = "draai"; return; }
   const i = raak(sx, sy);
   if (i > 0) { drag = { k: "punt", i }; snapshot(); return; }
+  if (S.tool === "vrij" && e.button === 0 && !e.altKey) { const [wx, wy] = toW(sx, sy); drag = { k: "teken", raw: [[wx, wy]], sx, sy }; cv.className = ""; dirty = true; return; }
   drag = { k: "pan", sx, sy, cx: S.view.cx, cy: S.view.cy, bewogen: false };
 });
 cv.addEventListener("pointermove", (e) => {
@@ -628,11 +716,13 @@ cv.addEventListener("pointermove", (e) => {
   if (drag.k === "richting") { const [wx, wy] = toW(sx, sy); let b = Math.atan2(wx, wy) * DEG; b = (b + 360) % 360;
     if (snapOn(e)) { const st = S.modus === "binnen" ? 90 : 5; b = (Math.round(b / st) * st) % 360; } S.b0 = b; $("i-b0").value = Math.round(b); for (const x of document.querySelectorAll("[data-b0]")) x.setAttribute("aria-pressed", +x.dataset.b0 === Math.round(b)); sync(); }
   else if (drag.k === "punt") { const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e); S.pts[drag.i].x = qx; S.pts[drag.i].y = qy; sync(); }
+  else if (drag.k === "teken") { if (Math.hypot(sx - drag.sx, sy - drag.sy) >= 4) { const [wx, wy] = toW(sx, sy); drag.raw.push([wx, wy]); drag.sx = sx; drag.sy = sy; dirty = true; } }
   else { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) { drag.bewogen = true; cv.className = "pan"; } if (drag.bewogen) { S.view.cx = drag.cx - (sx - drag.sx) / S.view.ppm; S.view.cy = drag.cy + (sy - drag.sy) / S.view.ppm; dirty = true; bewaar(); } }
 });
 cv.addEventListener("pointerup", (e) => {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-  if (drag && drag.k === "pan" && !drag.bewogen) {                      // klik zonder slepen = punt toevoegen
+  if (drag && drag.k === "teken") { const raw = drag.raw; drag = null; cv.className = ""; dirty = true; streekKlaar(raw); return; }
+  if (drag && drag.k === "pan" && !drag.bewogen && S.tool !== "vrij") {                      // klik zonder slepen = punt toevoegen
     const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e), last = S.pts[S.pts.length - 1];
     if (Math.hypot(qx - last.x, qy - last.y) > 0.04) { snapshot(); S.pts.push({ x: qx, y: qy, r: 0 }); sync(); }
   }
@@ -643,7 +733,7 @@ cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundi
   S.view.ppm = Math.max(6, Math.min(600, S.view.ppm * Math.exp(-e.deltaY * 0.0015))); S.view.cx = wx - (sx - W / 2) / S.view.ppm; S.view.cy = wy + (sy - H / 2) / S.view.ppm; dirty = true; bewaar(); }, { passive: false });
 const zoom = (f) => { S.view.ppm = Math.max(6, Math.min(600, S.view.ppm * f)); dirty = true; bewaar(); };
 $("z-in").onclick = () => zoom(1.3); $("z-uit").onclick = () => zoom(1 / 1.3); $("z-fit").onclick = () => { pasFit(); dirty = true; bewaar(); };
-addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.target.closest("input")) { e.preventDefault(); undo(); } });
+addEventListener("keydown", (e) => { if (e.key === "Escape" && drag && drag.k === "teken") { drag = null; dirty = true; } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.target.closest("input")) { e.preventDefault(); undo(); } });
 
 /* simulatie */
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -851,7 +941,7 @@ if (new URLSearchParams(location.search).get("selftest") === "1") zelftest();
 /* interactietest (?selftest=2): gesimuleerde muis op het tekenvlak */
 function interactietest() {
   const res = [];
-  S = fresh(); S.modus = "binnen"; toon(); resize();
+  S = fresh(); S.modus = "binnen"; S.tool = "punten"; toon(); resize();
   const r = cv.getBoundingClientRect();
   const ev = (type, x, y, extra = {}) => cv.dispatchEvent(new PointerEvent(type, Object.assign({ clientX: r.left + x, clientY: r.top + y, button: 0, pointerId: 1, bubbles: true }, extra)));
   const klik = (wx, wy) => { const [sx, sy] = toS(wx, wy); ev("pointerdown", sx, sy); ev("pointerup", sx, sy); };
@@ -877,6 +967,25 @@ function interactietest() {
   ev("pointerdown", hx, hy); ev("pointermove", s0x + 120, s0y); ev("pointerup", s0x + 120, s0y);
   ok(Math.round(S.b0) === 90, `richting naar rechts = ${Math.round(S.b0)}°`);
   ok(P.stappen[0][0] === "vooruit" || P.stappen[0][0] === "links" || P.stappen[0][0] === "rechts", "plan is opnieuw berekend");
+  try {
+  // vrij tekenen: een L-vorm met de muis trekken
+  S.pts = [{ x: 0, y: 0, r: 0 }]; S.tool = "vrij"; S.view = { cx: 1.5, cy: 1.5, ppm: 80 }; S.b0 = 0; toonGereedschap(); sync();
+  { const teken = (lijst) => { const [a0, b0_] = toS(...lijst[0]); ev("pointerdown", a0, b0_); for (const q of lijst.slice(1)) { const [a, b] = toS(...q); ev("pointermove", a, b); } const [a1, b1] = toS(...lijst[lijst.length - 1]); ev("pointerup", a1, b1); };
+    const L = []; for (let y = 0; y <= 3; y += 0.05) L.push([0.02 * Math.sin(y * 40), y]); for (let x = 0.05; x <= 3; x += 0.05) L.push([x, 3 + 0.02 * Math.sin(x * 40)]);
+    teken(L);
+    ok(S.pts.length >= 3 && S.pts.length <= 4, `getekende L wordt ${S.pts.length - 1} punten`);
+    ok(S.pts.some((p, i) => i > 0 && i < S.pts.length - 1 && p.r > 0), "de hoek krijgt vanzelf een radius");
+    ok(Math.abs(S.pts[S.pts.length - 1].x - 3) < 0.15 && Math.abs(S.pts[S.pts.length - 1].y - 3) < 0.15, `eindpunt (${S.pts[S.pts.length - 1].x.toFixed(2)}, ${S.pts[S.pts.length - 1].y.toFixed(2)})`);
+    ok(!P.fouten.length, "geen fouten in het plan");
+    S.glad = 5; opnieuwPassen(); ok(S.pts.length <= 4, "gladheid werkt opnieuw op dezelfde lijn");
+    S.pts = [{ x: 0, y: 0, r: 0 }]; S.glad = 2; sync();
+    const C = []; for (let a = 0; a <= 180; a += 4) C.push([2 * Math.sin(a * RAD), 2 - 2 * Math.cos(a * RAD)]);   // halve cirkel, straal 2 m
+    teken(C);
+    const rs = S.pts.filter((p) => p.r > 0).map((p) => p.r); const gem = rs.reduce((x, y) => x + y, 0) / (rs.length || 1);
+    ok(rs.length >= 2 && gem > 1.2 && gem < 3.2 && !P.fouten.length, `halve cirkel van 2 m: ${S.pts.length - 1} punten, gemiddelde radius ${gem.toFixed(2)} m`);
+    const e2 = (() => { let h = 90 - S.b0, x = 0, y = 0; for (const st of P.stappen) { for (const [k, w2] of (st[0] === "boog" ? boogStappen(st[1], st[2]) : [st])) { if (k === "vooruit") { x += w2 * Math.cos(h * RAD); y += w2 * Math.sin(h * RAD); } else if (k === "links") h += w2; else if (k === "rechts") h -= w2; } } return { x, y }; })();
+    const le = S.pts[S.pts.length - 1]; ok(Math.hypot(e2.x - le.x, e2.y - le.y) < 0.02, `robotstappen eindigen op het einde van de lijn (fout ${Math.hypot(e2.x - le.x, e2.y - le.y).toFixed(3)} m)`); }
+  } catch (err) { res.push('FAIL uitzondering: ' + err.stack.split(String.fromCharCode(10)).slice(0, 3).join(' | ')); }
   document.title = res.every((q) => q.startsWith("PASS")) ? "INTERACTIE OK" : "INTERACTIE FOUT";
   const pre = document.createElement("pre"); pre.id = "zelftest"; pre.textContent = res.join(String.fromCharCode(10)); document.body.append(pre);
 }
@@ -890,6 +999,8 @@ if (demo) {
   S.pts = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 3, r: 0.8 }, { x: 3, y: 3, r: 0.6 }, { x: 3, y: 0.5, r: 0 }, { x: 5.5, y: 0.5, r: 0 }];
 }
 toon();
+if (demo === "tekenen") { S = fresh(); S.modus = "binnen"; S.tool = "vrij"; toon(); resize(); S.view = { cx: 2, cy: 2.5, ppm: 75 };
+  const raw = []; for (let t = 0; t <= 1; t += 0.008) raw.push([0.9 * Math.sin(t * 6.2) * (1 - 0.1 * t) + 0.9 * t, 5 * t + 0.015 * Math.sin(t * 90)]); streekKlaar(raw); }
 if (demo === "voorb") { S.modus = "binnen"; toon(); sjCur = SJABLONEN[5]; $("b-voorb").click(); }
 if (demo) { const t = parseFloat(new URLSearchParams(location.search).get("t")); if (t > 0) { simT = Math.min(t, P.tijd); tijdLabel(); $("s-tijd").value = Math.round(simT / P.tijd * 1000); } }
 requestAnimationFrame(lus);
