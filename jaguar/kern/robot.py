@@ -45,7 +45,8 @@ DRIVER_LIMIT = 40         # % vermogen in positiemodus
 DRIVER_MARGIN = 0.30      # m: zo ver voor het doel neemt de driver het over
 DRIVER_AFWIJKING = 150    # pulsen: wielen die zoveel van elkaar afwijken = noodstop (draait weg)
 DRIVER_STUUR_KI = 0.4     # deel van de koersfout dat per stap (5 Hz) wordt weggestuurd
-DRIVER_STUUR_MAX = 25     # pulsen: zoveel mogen de doelen links en rechts uit elkaar worden geschoven
+DRIVER_STUUR_RATIO = 2.5  # pulsverschil per graad t.o.v. de wielgeometrie, zolang er nog geen draai gemeten is
+DRIVER_STUUR_MAX = 60     # pulsen: zoveel mogen de doelen links en rechts uit elkaar worden geschoven
 DRIVER_KOERS_OK = 0.3     # graden: binnen deze koersfout stuurt hij niet meer bij
 DRIVER_FABRIEK = {"KP": 30, "KI": 10, "KD": 0, "MXPF": 100, "MXPR": 100, "MMOD": 0}
 STALL_S = 1.5             # zo lang < 15 % van de verwachte snelheid bij vol vermogen = vastgelopen
@@ -141,6 +142,7 @@ class Jaguar:
         local = ip in ("127.0.0.1", "localhost")
         self.driver = (not local and not achter_vrij and os.environ.get("JAGUAR_DRIVER") != "0") if driver is None else driver
         self._acks = {"MM0": 0, "MM1": 0}
+        self._echo = {}                  # laatste commando zoals de driver het ontving (hij herhaalt het in zijn logregel)
         self._cfg = {}                   # "MM0 KP" -> [kanaal1, kanaal2]
         self._driver_gewijzigd = False
         self._alarm_since = None
@@ -201,6 +203,8 @@ class Jaguar:
         if len(parts) != 2 or parts[0] not in ("MM0", "MM1"):
             return
         board, value = parts
+        if value.startswith(("!P", "^")):
+            self._echo[board] = line
         if value == "+":
             self._acks[board] += 1
         elif value.startswith("FF="):
@@ -454,15 +458,27 @@ class Jaguar:
     # op zijn bevestiging ("+") en wordt zo nodig herhaald. Alleen commando's die je veilig kunt
     # herhalen (instellingen en absolute doelen !P), nooit relatieve (!PR).
     def _acked(self, board, text, tries=6):
+        """Commando sturen tot de driver het bevestigt ("+") EN zijn echo precies gelijk is: de controller
+        verliest soms het eind van een commando (gezien: "!P 2 -474PING" i.p.v. "-4740"), en zo'n kapot
+        doel bevestigt hij toch. Een afwijkende echo wordt meteen vervangen door het goede commando."""
         for _ in range(tries):
             before = self._acks[board]
+            self._echo.pop(board, None)
             self.send(f"{board} {text}")
             t0 = time.perf_counter()
             while time.perf_counter() - t0 < 0.3:
                 if self._acks[board] > before:
-                    return
+                    t1 = time.perf_counter()
+                    while self._echo.get(board) is None and time.perf_counter() - t1 < 0.15:
+                        time.sleep(0.01)              # de echo kan iets na de bevestiging komen
+                    if self._echo.get(board) == f"{board} {text}":
+                        time.sleep(0.03)              # rust vóór het volgende commando of de PING
+                        return
+                    break
                 time.sleep(0.01)
-        raise Stalled(f"{board} {text}: de driver bevestigt niet")
+            self.note(f"DRIVERCOMMANDO verminkt: {self._echo.get(board)!r} i.p.v. {board} {text}")
+            self.send("PING")                         # de watchdog stopt de robot na 0,2 s zonder PING
+        raise Stalled(f"{board} {text}: de driver bevestigt niet of ontvangt het verminkt")
 
     def _set_cfg(self, naam, vals):
         """Instelling per kanaal zetten en teruglezen tot ze klopt (vals = [kanaal 1, kanaal 2])."""
@@ -474,9 +490,12 @@ class Jaguar:
                     time.sleep(0.12)
                     self._cfg.pop(f"{board} {naam}", None)
                     self.send(f"{board} ~{naam}")
-                    t0 = time.perf_counter()
+                    t0 = t_ping = time.perf_counter()
                     while time.perf_counter() - t0 < 0.5 and f"{board} {naam}" not in self._cfg:
                         time.sleep(0.02)
+                        if time.perf_counter() - t_ping > 0.1:
+                            self.send("PING")
+                            t_ping = time.perf_counter()
                     if self._cfg.get(f"{board} {naam}", [None, None])[ch - 1] == vals[ch - 1]:
                         break
                 else:
@@ -485,6 +504,9 @@ class Jaguar:
     def _driver_mode(self, aan):
         self.send("MMW !M 0 0")
         self._set_cfg("MMOD", [3, 3] if aan else [0, 0])
+        if not aan:
+            self.send("MMW !MG")          # was de watchdog toch geslagen, dan zou het rijden stilvallen: opnieuw vrijgeven
+            self.send("PING")
 
     def driver_fabrieksinstelling(self):
         """Alles terug zoals de fabriek het had (open loop, PID 30/10/0, volle limiet)."""
@@ -544,14 +566,15 @@ class Jaguar:
                     fout = doel - self.heading
                     if abs(fout) > DRIVER_KOERS_OK:
                         # fout > 0 = naar links nodig = rechts verder dan links (ook achteruit)
-                        diff = max(-DRIVER_STUUR_MAX, min(DRIVER_STUUR_MAX, diff + DRIVER_STUUR_KI * fout / math.degrees(M_PER_CNT / WHEEL_DIS)))
+                        # Skid-steer slipt: voor één graad zijn `verhouding` keer zoveel pulsen verschil nodig als de
+                        # wielgeometrie zegt (gemeten 1,8 tot 3,9 afhankelijk van de ondergrond, zie turn()).
+                        verhouding = min(5.0, max(1.0, self.turn_ratio or DRIVER_STUUR_RATIO))
+                        diff = max(-DRIVER_STUUR_MAX, min(DRIVER_STUUR_MAX, diff + DRIVER_STUUR_KI * verhouding * fout / math.degrees(M_PER_CNT / WHEEL_DIS)))
                     if round(diff) != sent:
                         sent = round(diff)
                         for b, (t1, t2) in self._driver_targets(raw, pulses, sent).items():
-                            self.send(f"{b} !P 1 {t1}")        # zonder bevestiging: absoluut, de volgende stap herstelt een verloren commando
-                            time.sleep(0.01)
-                            self.send(f"{b} !P 2 {t2}")
-                            time.sleep(0.01)
+                            self._acked(b, f"!P 1 {t1}")
+                            self._acked(b, f"!P 2 {t2}")
                 if now_c != last:
                     last, last_move = now_c, time.perf_counter()
                 if time.perf_counter() - t0 > 2.0 and time.perf_counter() - last_move > 1.0:
