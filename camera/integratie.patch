@@ -1,0 +1,768 @@
+diff --git a/bediening.py b/bediening.py
+index 53e4947..717350a 100644
+--- a/bediening.py
++++ b/bediening.py
+@@ -82,6 +82,8 @@ class Control:
+                 robot.stop_requested = self.stop_requested     # STOP tijdens het verbinden
+                 prepare(robot, a.rest)
+                 rijd(robot, stappen, power)
++            if robot.obstakel:
++                result, error = "obstakel", robot.obstakel
+         except Aborted:
+             result = "gestopt"
+         except OSError as e:
+@@ -124,6 +126,9 @@ def main():
+     args = ap.parse_args()
+     # Een teken dat de console niet kent (bv. → in parcours) mag nooit een rit of de server laten crashen.
+     sys.stdout.reconfigure(errors="replace")
++    if live_view.OPTIONS["obstakel"]:   # ook tussen de ritten: de pagina toont wat de camera ziet (kalibreren)
++        import obstakel
++        obstakel.get(live_view.OPTIONS["obstakel_stop_m"])
+     hub = live_view.Hub(live_view.LiveView("nog geen rit"))
+     hub.control = Control(hub, args)
+     live_view.serve(hub, args.web_port, network=args.network)
+diff --git a/fase1_heen_en_terug.py b/fase1_heen_en_terug.py
+index ac43d50..cdf1e7f 100644
+--- a/fase1_heen_en_terug.py
++++ b/fase1_heen_en_terug.py
+@@ -52,6 +52,8 @@ TURN_K = 6.0              # vermogen per graad resterende hoek
+ TURN_LEAD = 0.25          # s: uitloop na vermogen 0, voorspeld met de draaisnelheid
+ TURN_TOL = 1.0            # graden
+ REST_MAX_G = 0.03         # spreiding van de accelerometer in rust (normaal ≈ 0,012 g); meer = robot bewoog
++CAM_MAX_AGE = 1.5         # s: ouder camerabeeld = obstakeldetectie blind = niet vooruit rijden
++CAM_LATENCY = 0.4         # s: camera + wifi; zo ver rijdt de robot al voor hij het beeld ziet
+ 
+ 
+ class Stalled(RuntimeError):
+@@ -62,6 +64,15 @@ class Aborted(RuntimeError):
+     """STOP op de live pagina (bediening.py): motoren 0, rit afgebroken."""
+ 
+ 
++class Obstakel(RuntimeError):
++    """De camera ziet iets vlak voor de robot (obstakel.py). parcours.py wacht, rijdt eromheen of
++    kort de stap in; de andere rijscripts stoppen de rit."""
++
++
++class CameraWeg(Obstakel):
++    """Geen vers camerabeeld terwijl de obstakeldetectie aan staat: blind, dus de rit stopt."""
++
++
+ class PID:
+     """PID-regelaar.
+     - D-term op de meting (bv. de gyrosnelheid) i.p.v. op de fout: geen stoot als het setpoint verspringt.
+@@ -81,12 +92,15 @@ class PID:
+ 
+ 
+ class Jaguar:
+-    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False):
++    def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False, live=None):
+         self.writer = writer
++        self.live = live      # live weergave (live_view / mqtt_stream): krijgt elke ontvangen regel
+         self.t0 = time.perf_counter()
+         self.phase = "rust"
+         self.power = 0
+         self.stop_requested = False   # True = elk volgend motorcommando wordt 0 en de rit breekt af
++        self.obstacle = None          # obstakel.Detector: vooruit rijden stopt voor wat de camera ziet
++        self.obstakel = None          # reden als de rit voor een obstakel stopte
+         self.sock = socket.create_connection((ip, port), timeout=3)
+         self.sock.settimeout(0.5)
+         self.lock = threading.Lock()
+@@ -161,6 +175,8 @@ class Jaguar:
+ 
+     def _parse(self, line):
+         self.note(line)
++        if self.live is not None:
++            self.live.feed(time.perf_counter() - self.t0, self.phase, self.power, line)
+         if line.startswith("#"):
+             p = line.split(",")
+             if len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
+@@ -200,7 +216,7 @@ class Jaguar:
+         self.odo.imu(self._clock, steps / IMU_HZ, gyro, acc)
+ 
+     def melding(self, text):
+-        """Bericht voor de terminal, de CSV en de live pagina ."""
++        """Bericht voor de terminal, de CSV en de live pagina (bv. een omweg rond een obstakel)."""
+         print(text)
+         self.note(f"MELDING {self.phase} {text}")
+         view = getattr(self.live, "view", self.live)     # MqttStream heeft de LiveView in .view
+@@ -231,8 +247,26 @@ class Jaguar:
+         self.target_heading, self.line = 0.0, (0.0, 0.0)
+         return spread < REST_MAX_G
+ 
++    def _obstacle_room(self):
++        """Vrije weg (m) voor de robot volgens de camera, na de stopmarge en de beeldvertraging;
++        None = niets gezien binnen bereik. Geen vers beeld: niet blind verder rijden."""
++        det = self.obstacle
++        d, age = det.latest()
++        if age > CAM_MAX_AGE:
++            raise CameraWeg(f"geen vers camerabeeld ({det.error or f'{age:.1f} s oud'}): de obstakeldetectie is blind. "
++                           "Controleer de camera of zet Obstakels uit in Opties")
++        if d is None:
++            return None
++        room = d - det.stop - abs(self.odo.v) * (age + CAM_LATENCY)
++        if room <= 0:   # ook als het obstakel er al stond: anders zakt het vermogen naar 0 en wacht hij tot de timeout
++            raise Obstakel(f"obstakel op {d:.2f} m voor de robot (camera)")
++        return room
++
+     def _guard(self, p):
+-        """Stoppen als de robot te schuin staat of de wielen de grond niet meer betrouwbaar raken."""
++        """Stoppen als de robot te schuin staat, de wielen de grond niet meer betrouwbaar raken,
++        of (vooruit) de camera een obstakel binnen de stopafstand ziet."""
++        if p > 0 and self.obstacle is not None:
++            self._obstacle_room()
+         if not self.odo.klaar:
+             return
+         if self.odo.kanteling > MAX_KANTEL:
+@@ -426,6 +460,10 @@ class Jaguar:
+                 break
+             p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
+             p_brake = max(self.creep, math.sqrt(2 * brake * remaining) / self.k_v)
++            if direction > 0 and self.obstacle is not None:   # op tijd afremmen voor wat de camera ziet
++                room = self._obstacle_room()
++                if room is not None:
++                    p_brake = min(p_brake, math.sqrt(2 * brake * room) / self.k_v)
+             p = int(min(top, p_ramp, p_brake))
+             # Kruipvermogen te laag om te bewegen: stap voor stap verhogen (blijft voor volgende segmenten).
+             if p <= self.creep < top and now - t0 > ramp and now - moved_at > 0.6:
+@@ -546,7 +584,13 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
+             from mqtt_stream import MqttStream
+             view = MqttStream(name, view, host=mqtt_host)   # rekent via dezelfde LiveView en publiceert naar MQTT/Grafana
+         robot = Jaguar(ip, port, writer=writer, live=view)
+-        yield robot
++        robot.obstacle = obstacle_detector()
++        try:
++            yield robot
++        except Obstakel as e:   # geen fout van het script: netjes stoppen (close() hieronder: motoren 0, E-Stop)
++            robot.obstakel = str(e)
++            robot.note(f"OBSTAKEL {robot.phase} {e}")
++            print(f"{robot.phase}: GESTOPT - {e}.")
+     except BaseException as e:
+         error = e
+         raise
+@@ -555,6 +599,9 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
+             if robot is not None:
+                 robot.close()
+                 print("Motoren 0, E-Stop terug actief.")
++            if view is not None:
++                view.finish()
++                time.sleep(0.3)  # laatste gegevens nog naar de browser sturen
+         finally:
+             if f is not None:
+                 f.close()
+@@ -572,6 +619,22 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
+                 pass
+ 
+ 
++def obstacle_detector():
++    """obstakel.Detector als Obstakels aan staat in de opties (live_opties.json) en de camera gekalibreerd is."""
++    import live_view
++    opts = live_view.OPTIONS
++    if not opts["obstakel"]:
++        return None
++    import obstakel
++    det = obstakel.get(opts["obstakel_stop_m"])
++    if det.model is None:
++        print("Obstakels: de camera is nog niet gekalibreerd (live pagina → Opties → Kalibreren): rijden zonder.")
++        return None
++    print(f"Obstakels: vooruit stoppen op {det.stop:.2f} m van wat de camera ziet"
++          + (f" (de camera ziet de vloer pas vanaf {det.model['blind_m']:.2f} m)" if det.stop > det.stop_m else "") + ".")
++    return det
++
++
+ def prepare(robot, rest):
+     robot.hold(rest)
+     for _ in range(3):
+@@ -613,8 +676,14 @@ def add_drive_args(ap, distance):
+     ap.add_argument("--ramp", type=float, default=1.5, help="seconden om van 0 naar het volle vermogen te gaan")
+     ap.add_argument("--creep", type=int, default=60, help="kruipvermogen vlak voor het doel")
+     ap.add_argument("--tolerance", type=float, default=3.0, help="toegelaten stopfout in mm (min. ±1 encoderpuls ca. 2,8 mm)")
+-    ap.add_argument("--ip", default=ROBOT_IP)
++    ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
+     ap.add_argument("--port", type=int, default=ROBOT_PORT)
++    ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True, help="live weergave in de browser (standaard aan)")
++    ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=True,
++                    help="live pagina ook bereikbaar voor andere apparaten op het netwerk (standaard aan)")
++    ap.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="live naar MQTT/Grafana sturen (zie grafana/README.md)")
++    ap.add_argument("--mqtt-host", default="127.0.0.1",
++                    help="pc waarop Grafana/Docker draait; bv. 192.168.0.104 als dat een andere laptop is")
+ 
+ 
+ def run_segment(robot, args, power):
+@@ -636,7 +705,8 @@ def main():
+     args = ap.parse_args()
+     if not -1000 <= args.power <= 1000:
+         ap.error("--power moet tussen -1000 en 1000 liggen")
+-    with robot_session(args.csv, "_heen_terug", args.ip, args.port) as robot:
++    with robot_session(args.csv, "_heen_terug", args.ip, args.port, args.live, args.mqtt,
++                       args.mqtt_host, args.network) as robot:
+         prepare(robot, args.rest)
+         robot.phase = "heen"
+         run_segment(robot, args, args.power)
+diff --git a/live.html b/live.html
+index 5514612..d993d22 100644
+--- a/live.html
++++ b/live.html
+@@ -92,6 +92,26 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+ #opt-state { font-size: 12px; color: var(--ink-3); }
+ #opt-state.ok { color: var(--good); } #opt-state.bad { color: var(--bad); }
+ .panel[hidden] { display: none; }
++.cam { position: relative; aspect-ratio: 4 / 3; background: #0b0d0c; border-radius: 4px; overflow: hidden; }
++.cam img { width: 100%; height: 100%; object-fit: contain; display: block; }
++.cam span { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; color: #c9d1cd; font-size: 13px; }
++.cam span:empty { display: none; }
++/* Obstakeldetectie: lijn waar de vloer ophoudt (middelste strook = weg van de robot) */
++.edge { position: absolute; left: 38%; width: 24%; border-top: 3px solid var(--good); pointer-events: none; }
++.prof { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
++.prof polyline { fill: none; stroke: #ffd400; stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .85; }
++.edge.warn { border-color: var(--warn); } .edge.bad { border-color: var(--bad); }
++.edge b { position: absolute; left: 0; bottom: 4px; white-space: nowrap; font: 600 12px var(--f-data); color: #fff;
++  background: rgb(0 0 0 / .6); padding: 1px 6px; border-radius: 3px; }
++#dlg-kal { width: min(720px, 96vw); max-height: 94vh; }
++/* beeld niet hoger dan ~55 % van het venster: knoppen en lijst blijven zichtbaar zonder scrollen */
++.kal-img { position: relative; cursor: crosshair; background: #0b0d0c; aspect-ratio: 4 / 3; border-radius: 4px; overflow: hidden;
++  width: min(100%, 55vh * 4 / 3); margin: 0 auto; }
++.kal-img img { width: 100%; height: 100%; display: block; }
++.kal-img .edge { border-color: var(--bad); }
++.kal-img .auto { border-top-style: dashed; border-color: #fff; }
++.kal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
++.kal-row input { font: inherit; width: 70px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); }
+ </style>
+ </head>
+ <body>
+@@ -149,6 +169,27 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+     </div>
+   </dialog>
+ 
++  <dialog id="dlg-kal" aria-labelledby="kal-title">
++    <div class="dlg-head">
++      <h2 id="kal-title">Camera kalibreren</h2>
++      <button id="b-kal-close" class="btn ghost">Sluiten</button>
++    </div>
++    <div class="opt-body">
++      <p class="note">Eén keer nodig (zolang de camera niet verschuift). Zet de robot recht voor een muur, op 1 m van de voorkant van de robot.
++        Klik in het beeld op de voet van de muur, in het midden (de witte stippellijn is wat de robot zelf ziet), vul de afstand in en klik op Punt bewaren.
++        Herhaal op 2 m en liefst ook op 3 m.</p>
++      <div class="kal-row">
++        <label for="kal-d">Afstand tot de muur</label><input id="kal-d" type="number" min="0.3" max="10" step="0.1" value="1"> m
++        <button id="b-kal-save" class="btn" disabled>Punt bewaren</button>
++        <button id="b-kal-new" class="btn ghost">Nieuw beeld</button>
++        <span class="note" id="kal-msg" role="status"></span>
++      </div>
++      <div class="kal-img" id="kal-img"><img id="kal-pic" alt="Camerabeeld om de voet van de muur aan te klikken">
++        <div id="kal-auto" class="edge auto" hidden></div><div id="kal-mark" class="edge" hidden></div></div>
++      <div class="kal-row"><span class="note" id="kal-list"></span><button id="b-kal-clear" class="btn ghost">Alles wissen</button></div>
++    </div>
++  </dialog>
++
+   <dialog id="dlg-opt" aria-labelledby="opt-title">
+     <div class="dlg-head">
+       <h2 id="opt-title">Opties</h2>
+@@ -156,6 +197,26 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+       <button id="b-opt-close" class="btn ghost">Sluiten</button>
+     </div>
+     <div class="opt-body">
++      <section>
++        <h3>Camera</h3>
++        <label class="row"><input type="checkbox" id="o-camera"> Live camerabeeld tonen</label>
++        <fieldset id="o-cam-set">
++          <div class="field"><label for="o-res">Resolutie</label>
++            <select id="o-res"><option>320x240</option><option>640x480</option><option>800x600</option><option>1280x960</option></select></div>
++          <div class="field"><label for="o-fps">Beelden per seconde</label>
++            <select id="o-fps"><option>2</option><option>5</option><option>10</option><option>15</option><option>25</option></select></div>
++        </fieldset>
++        <p class="note">Het camerabeeld gaat over dezelfde wifi als de robotgegevens. Komen de metingen haperend binnen, kies dan minder beelden per seconde of zet de camera uit.</p>
++      </section>
++      <section>
++        <h3>Obstakels (camera)</h3>
++        <label class="row"><input type="checkbox" id="o-obst"> Vooruit stoppen voor wat de camera ziet</label>
++        <div class="field"><label for="o-stop">Stoppen op</label>
++          <select id="o-stop"><option value="0.3">0,3 m</option><option value="0.4">0,4 m (aanbevolen)</option><option value="0.5">0,5 m</option><option value="0.6">0,6 m</option><option value="0.8">0,8 m</option><option value="1">1,0 m</option></select></div>
++        <div class="kal-row"><span class="note" id="o-kal-state"></span><button id="b-kal" class="btn ghost">Kalibreren…</button></div>
++        <p class="note">Ter plaatse draaien vraagt 11 cm voor de voorkant (de hoeken draaien rond); de rest is marge. De robot stopt nooit dichter dan waar de camera de vloer nog ziet.</p>
++        <p class="note">Bij een obstakel wacht de robot even (iemand loopt weg), rijdt eromheen als er naast vrije vloer is, of eindigt de stap aan de muur; daarna gaat het parcours verder. Alleen vooruit; achteruit is hij blind. Werkt niet bij glas, een muur in de kleur van de vloer of in het donker: de noodstop blijft nodig.</p>
++      </section>
+       <section>
+         <h3>Grafieken</h3>
+         <div class="opt-panels">
+@@ -189,6 +250,9 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+   </div>
+ 
+   <div class="grid">
++    <div class="panel" data-panel="camera" hidden><h2>Camera</h2>
++      <div class="cam"><img id="cam" alt="Live beeld van de robotcamera"><svg id="cam-prof" class="prof" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline/></svg><div id="cam-edge" class="edge" hidden><b></b></div><span id="cam-msg"></span></div>
++      <p class="note" id="cam-note">Axis-camera op de robot, via deze laptop doorgestuurd.</p></div>
+     <div class="panel" data-panel="koers"><h2>Koers</h2>
+       <div class="legend"><span><b style="background:var(--s1)"></b>gyro (Z)</span><span><b style="background:var(--s2)"></b>encoders (rechts − links)</span></div>
+       <canvas id="c-koers"></canvas></div>
+@@ -234,10 +298,72 @@ es.onmessage = (e) => {
+   analyseState(m);
+   if (status.melding && status.melding !== lastMelding) { lastMelding = status.melding; msg(status.melding); }
+   controlState(m.bediening);
++  obstacleState(m.obstakel);
+   dirty = true;
+ };
+ 
+-let lastMelding = null;   // bericht van het rijscript 
++let lastMelding = null;   // bericht van het rijscript (obstakel, omweg, stap ingekort)
++
++// Obstakeldetectie (obstakel.py): lijn waar de vloer ophoudt, met de afstand als de camera gekalibreerd is.
++function obstacleState(o) {
++  const e = $("cam-edge");
++  e.hidden = !o || o.rij == null || o.leeftijd == null || o.leeftijd > 2;
++  // vloerrand over de hele breedte (geel): toont ook vloer die verder doorloopt, bv. door een open deur
++  const pr = !e.hidden && o.profiel;
++  $("cam-prof").firstChild.setAttribute("points", pr ? pr.map((r, i) => `${(i + 0.5) / pr.length * 100},${r * 100}`).join(" ") : "");
++  if (!e.hidden) {
++    e.style.top = `${o.rij * 100}%`;
++    const near = o.m != null && o.m <= o.stop_m, soon = o.m != null && o.m <= o.stop_m + 1;
++    e.className = `edge${near ? " bad" : soon ? " warn" : ""}`;
++    e.firstChild.textContent = !o.gekalibreerd ? "niet gekalibreerd" : o.m == null ? "vrij" : `obstakel ${nl(o.m, 1)} m`;
++  }
++  const auto = $("kal-auto");
++  auto.hidden = e.hidden;
++  if (!e.hidden) auto.style.top = `${o.rij * 100}%`;
++}
++
++// Kalibratie: voet van de muur aanklikken op een gekende afstand (POST /kalibratie).
++let kalRow = null;
++function kalState(c) {
++  const pts = c.punten || [];
++  $("o-kal-state").textContent = c.model ? `gekalibreerd (${pts.length} punten; ziet de vloer vanaf ${nl(c.model.blind_m, 2)} m)` : `nog niet gekalibreerd${pts.length ? ` (${pts.length} punt, minstens 2 nodig)` : ""}`;
++  $("kal-list").textContent = pts.length ? "Punten: " + pts.map(([r, d]) => `${nl(d, 1)} m → rij ${nl(r, 3)}`).join(" · ") : "Nog geen punten.";
++}
++function kalPicture() {
++  kalRow = null; $("kal-mark").hidden = true; $("b-kal-save").disabled = true;
++  $("kal-pic").src = `/camera.jpg?v=${Date.now()}`;
++}
++$("b-kal").onclick = async () => {
++  $("kal-msg").textContent = "";
++  try { kalState(await (await fetch("/kalibratie")).json()); } catch {}
++  kalPicture();
++  $("dlg-kal").showModal();
++};
++$("b-kal-close").onclick = () => $("dlg-kal").close();
++$("b-kal-new").onclick = kalPicture;
++$("kal-pic").onerror = () => { $("kal-msg").textContent = "Geen camerabeeld (192.168.0.65)."; };
++$("kal-img").onclick = (e) => {
++  const r = $("kal-img").getBoundingClientRect();
++  kalRow = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
++  $("kal-mark").hidden = false; $("kal-mark").style.top = `${kalRow * 100}%`;
++  $("b-kal-save").disabled = false;
++};
++$("b-kal-save").onclick = async () => {
++  const d = parseFloat($("kal-d").value.replace(",", "."));
++  try {
++    const r = await fetch("/kalibratie", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rij: kalRow, afstand: d }) });
++    const c = await r.json();
++    if (!r.ok) throw new Error(c.fout || `HTTP ${r.status}`);
++    kalState(c);
++    $("kal-msg").textContent = c.model ? "Bewaard. De robot rekent nu afstanden uit het beeld." : `Bewaard. Zet de robot nu op een andere afstand (bv. ${nl(d + 1, 0)} m).`;
++    $("kal-d").value = d + 1;
++    kalPicture();
++  } catch (err) { $("kal-msg").textContent = err.message; }
++};
++$("b-kal-clear").onclick = async () => {
++  if (!confirm("Alle kalibratiepunten wissen?")) return;
++  try { kalState(await (await fetch("/kalibratie/wissen", { method: "POST", body: "{}" })).json()); } catch {}
++};
+ 
+ // Rijden vanaf de pagina (alleen met python bediening.py): parcours samenstellen, starten, STOP.
+ const KINDS = { vooruit: ["Vooruit", "m", 1], achteruit: ["Achteruit", "m", 1], links: ["Links", "°", 90], rechts: ["Rechts", "°", 90] };
+@@ -254,6 +380,7 @@ function controlState(b) {
+   if (key !== lastResult) {
+     lastResult = key;
+     if (b?.resultaat === "gestopt") msg("rit gestopt met STOP", true);
++    else if (b?.resultaat === "obstakel") msg(`gestopt: ${b.fout}`, true);
+     else if (b?.resultaat === "fout") msg(`rit niet gelukt: ${b.fout}`, true);
+   }
+ }
+@@ -305,14 +432,30 @@ addEventListener("keydown", (e) => {
+   if (e.code === "Space" && !$("b-stop").hidden && !e.target.closest("input, select, textarea")) { e.preventDefault(); stopRobot(); }
+ });
+ 
+-// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen.
++// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen, camera aan of uit.
++let camKey = null, camRetry = null;
+ function applyOptions(o) {
+   if (!o) return;
+   for (const p of document.querySelectorAll("[data-panel]")) {
+-    const show = o.panelen[p.dataset.panel] !== false;
++    const show = p.dataset.panel === "camera" ? o.camera : o.panelen[p.dataset.panel] !== false;
+     if (p.hidden === show) { p.hidden = !show; dirty = true; }
+   }
++  const key = o.camera ? `${o.camera_resolutie}@${o.camera_fps}` : null;
++  if (key !== camKey) { camKey = key; camera(); }
+ }
++function camera() {
++  clearTimeout(camRetry);
++  const img = $("cam");
++  if (!camKey) { img.removeAttribute("src"); return; }
++  $("cam-msg").textContent = "camera verbinden…";
++  img.src = `/camera?v=${Date.now()}`;
++}
++$("cam").onload = () => { $("cam-msg").textContent = ""; };
++$("cam").onerror = () => {
++  if (!camKey) return;
++  $("cam-msg").textContent = "camera niet bereikbaar (192.168.0.65) · opnieuw proberen…";
++  camRetry = setTimeout(camera, 5000);
++};
+ es.onerror = () => {
+   setConn(status.klaar ? ["ok", "rit klaar · script gestopt"] : ["bad", "geen verbinding met script"]);
+   if (!busy) { $("b-analyse").disabled = true; msg(frameSrc ? "" : "script gestopt: analyse niet meer mogelijk"); }
+@@ -365,13 +508,21 @@ for (const d of document.querySelectorAll("dialog"))
+ 
+ // Opties-venster: bewaren op de server (POST /options); /options opent de pagina met dit venster open.
+ function fillOptions(o) {
++  $("o-camera").checked = o.camera;
++  $("o-res").value = o.camera_resolutie;
++  if (![...$("o-fps").options].some((x) => +x.value === o.camera_fps)) $("o-fps").add(new Option(o.camera_fps));
++  $("o-fps").value = String(o.camera_fps);
++  $("o-cam-set").disabled = !o.camera;
+   $("o-auto").checked = o.auto_analyse;
++  $("o-obst").checked = o.obstakel;
++  $("o-stop").value = String(o.obstakel_stop_m);
++  $("o-stop").disabled = !o.obstakel;
+   for (const c of document.querySelectorAll("[data-opt]")) c.checked = o.panelen[c.dataset.opt] !== false;
+ }
+ function optState(text, cls = "") { $("opt-state").textContent = text; $("opt-state").className = cls; }
+ async function openOptions() {
+   optState("");
+-  try { fillOptions(await (await fetch("/options.json")).json()) }
++  try { fillOptions(await (await fetch("/options.json")).json()); kalState(await (await fetch("/kalibratie")).json()); }
+   catch { optState("geen verbinding met het script", "bad"); }
+   $("dlg-opt").showModal();
+ }
+@@ -380,9 +531,12 @@ $("b-opt-close").onclick = () => $("dlg-opt").close();
+ $("dlg-opt").addEventListener("close", () => { if (location.pathname === "/options") history.replaceState(null, "", "/"); });
+ $("dlg-opt").addEventListener("change", async () => {
+   const o = {
++    camera: $("o-camera").checked, camera_resolutie: $("o-res").value, camera_fps: +$("o-fps").value,
+     auto_analyse: $("o-auto").checked,
++    obstakel: $("o-obst").checked, obstakel_stop_m: +$("o-stop").value,
+     panelen: Object.fromEntries([...document.querySelectorAll("[data-opt]")].map((c) => [c.dataset.opt, c.checked])),
+   };
++  $("o-cam-set").disabled = !o.camera;
+   optState("bewaren…");
+   try {
+     const r = await fetch("/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(o) });
+diff --git a/live_opties.json b/live_opties.json
+index 33c104f..316a8d3 100644
+--- a/live_opties.json
++++ b/live_opties.json
+@@ -1,4 +1,7 @@
+ {
++  "camera": true,
++  "camera_resolutie": "640x480",
++  "camera_fps": 10,
+   "auto_analyse": false,
+   "panelen": {
+     "koers": true,
+@@ -7,5 +10,7 @@
+     "pitchroll": true,
+     "gyro": true,
+     "versnelling": true
+-  }
+-}
++  },
++  "obstakel": true,
++  "obstakel_stop_m": 0.4
++}
+\ No newline at end of file
+diff --git a/live_view.py b/live_view.py
+index ce88734..8a053cf 100644
+--- a/live_view.py
++++ b/live_view.py
+@@ -19,6 +19,7 @@ import socket
+ import statistics as st
+ import threading
+ import time
++import urllib.request
+ import webbrowser
+ from collections import deque
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+@@ -29,8 +30,14 @@ from analyse_rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
+ PAGE = Path(__file__).parent / "live.html"
+ DASHBOARD = Path(__file__).parent / "dashboard.html"   # geschreven door analyse_rit.py
+ OPTIONS_FILE = Path(__file__).parent / "live_opties.json"   # bewaard tussen de ritten
++# Axis-camera op de robot (Jaguar4x4Startup/Notes.txt); vraagt Digest-login, dus de server stuurt het beeld door.
++CAMERA_HOST = "192.168.0.65:8081"
++CAMERA_USER, CAMERA_PASSWORD = "root", "drrobot"
++CAMERA_RESOLUTIONS = ("320x240", "640x480", "800x600", "1280x960")
+ PANELS = ("koers", "baan", "snelheid", "pitchroll", "gyro", "versnelling")
+-DEFAULT_OPTIONS = {"auto_analyse": False, "panelen": {p: True for p in PANELS}}
++DEFAULT_OPTIONS = {"camera": True, "camera_resolutie": "640x480", "camera_fps": 10,
++                   "auto_analyse": False, "panelen": {p: True for p in PANELS},
++                   "obstakel": True, "obstakel_stop_m": 0.4}   # obstakel.py: vooruit stoppen voor wat de camera ziet
+ IMU_DT = 0.02             # IMU stuurt 50 Hz
+ SPEED_CYCLES = 3          # encodersnelheid over 3 pollcycli (~0.6 s)
+ ANGLE_ALPHA = 0.1         # laagdoorlaat pitch/roll (~0.2 s bij 50 Hz)
+@@ -235,9 +242,17 @@ def clean_options(raw):
+     o = json.loads(json.dumps(DEFAULT_OPTIONS))
+     if not isinstance(raw, dict):
+         return o
+-    for key in ("auto_analyse",):
++    for key in ("camera", "auto_analyse", "obstakel"):
+         if isinstance(raw.get(key), bool):
+             o[key] = raw[key]
++    if raw.get("camera_resolutie") in CAMERA_RESOLUTIONS:
++        o["camera_resolutie"] = raw["camera_resolutie"]
++    fps = raw.get("camera_fps")
++    if isinstance(fps, int) and not isinstance(fps, bool) and 1 <= fps <= 30:
++        o["camera_fps"] = fps
++    stop = raw.get("obstakel_stop_m")
++    if isinstance(stop, (int, float)) and not isinstance(stop, bool) and 0.25 <= stop <= 2.0:
++        o["obstakel_stop_m"] = float(stop)
+     panels = raw.get("panelen")
+     if isinstance(panels, dict):
+         for p in PANELS:
+@@ -257,12 +272,32 @@ def save_options(raw):
+     global OPTIONS
+     OPTIONS = clean_options(raw)
+     OPTIONS_FILE.write_text(json.dumps(OPTIONS, indent=2), encoding="utf-8")
++    det = _detector()
++    if det is not None:
++        det.stop_m = OPTIONS["obstakel_stop_m"]
+     return OPTIONS
+ 
+ 
++def _detector():
++    """obstakel.Detector als die in dit proces draait (zonder OpenCV te laden als dat niet zo is)."""
++    import sys
++    mod = sys.modules.get("obstakel")
++    return mod.current() if mod else None
++
++
+ OPTIONS = load_options()
+ 
+ 
++def open_camera(resolution, fps=None):
++    """MJPEG-stroom van de Axis-camera (Digest-login); fps=None: één JPEG-beeld."""
++    url = (f"http://{CAMERA_HOST}/axis-cgi/mjpg/video.cgi?resolution={resolution}&fps={fps}&compression=30" if fps
++           else f"http://{CAMERA_HOST}/axis-cgi/jpg/image.cgi?resolution={resolution}")
++    passwords = urllib.request.HTTPPasswordMgrWithDefaultRealm()
++    passwords.add_password(None, f"http://{CAMERA_HOST}/", CAMERA_USER, CAMERA_PASSWORD)
++    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(passwords))
++    return opener.open(url, timeout=4)
++
++
+ class Hub:
+     """Wat de webserver toont: de LiveView van de huidige rit. Met bediening.py (control) wisselt
+     die per rit en kan de pagina ritten starten en stoppen."""
+@@ -285,8 +320,19 @@ def _handler(hub):
+             path = self.path.split("?", 1)[0]
+             if path == "/stream":
+                 return self._stream()
++            if path == "/camera":
++                return self._camera()
+             if path == "/options.json":
+                 return self._json(200, OPTIONS)
++            if path == "/camera.jpg":      # één beeld, voor de kalibratie
++                try:
++                    with open_camera("640x480") as resp:
++                        return self._send(200, "image/jpeg", resp.read())
++                except OSError as e:
++                    return self.send_error(502, f"Camera niet bereikbaar op {CAMERA_HOST}: {e}")
++            if path == "/kalibratie":
++                import obstakel
++                return self._json(200, obstakel.load_calibration())
+             if path == "/dashboard":
+                 if not DASHBOARD.exists():
+                     return self.send_error(404, "Nog geen dashboard: klik eerst op Analyse.")
+@@ -300,9 +346,9 @@ def _handler(hub):
+                 if hub.control is None:
+                     return self._json(404, {"fout": "Deze pagina bestuurt de robot niet."})
+                 return self._json(*hub.control.stop())     # STOP mag iedereen die meekijkt
+-            if self.path not in ("/options", "/rit"):
++            if self.path not in ("/options", "/rit", "/kalibratie", "/kalibratie/wissen"):
+                 return self.send_error(404)
+-            if not self._local():   # opties en ritten starten bepalen hoe veilig de robot rijdt
++            if not self._local():   # opties en kalibratie bepalen hoe veilig de robot rijdt
+                 return self._json(403, {"fout": "Dit kan alleen op de laptop die met de robot verbonden is."})
+             try:
+                 length = int(self.headers.get("Content-Length", 0))
+@@ -311,13 +357,48 @@ def _handler(hub):
+                 return self._json(400, {"fout": "geen geldige JSON"})
+             if self.path == "/options":
+                 return self._json(200, save_options(raw))
++            if self.path.startswith("/kalibratie"):
++                import obstakel
++                if self.path == "/kalibratie/wissen":
++                    cal = obstakel.clear_calibration()
++                else:
++                    try:
++                        cal = obstakel.save_point(float(raw["rij"]), float(raw["afstand"]))
++                    except (KeyError, TypeError, ValueError):
++                        return self._json(400, {"fout": "rij en afstand nodig"})
++                det = obstakel.current()
++                if det is not None:
++                    det.model = cal.get("model")
++                return self._json(200, cal)
+             if hub.control is None:
+                 return self._json(404, {"fout": "Ritten starten kan alleen met python bediening.py."})
+             return self._json(*hub.control.start(raw))
+-
+         def _json(self, code, answer):
+             self._send(code, "application/json", json.dumps(answer).encode())
+ 
++        def _camera(self):
++            """MJPEG van de Axis-camera doorsturen (met de login), tot de browser sluit of de camera uit gaat."""
++            if not OPTIONS["camera"]:
++                return self.send_error(404, "Camera staat uit (zie /options).")
++            try:
++                resp = open_camera(OPTIONS["camera_resolutie"], OPTIONS["camera_fps"])
++            except OSError as e:
++                return self.send_error(502, f"Camera niet bereikbaar op {CAMERA_HOST}: {e}")
++            try:
++                self.send_response(200)
++                self.send_header("Content-Type", resp.headers.get("Content-Type", "multipart/x-mixed-replace"))
++                self.send_header("Cache-Control", "no-store")
++                self.end_headers()
++                while OPTIONS["camera"]:
++                    chunk = resp.read1(65536)
++                    if not chunk:
++                        break
++                    self.wfile.write(chunk)
++            except OSError:
++                pass      # browser gesloten of camera weg
++            finally:
++                resp.close()
++
+         def _send(self, code, ctype, body):
+             self.send_response(code)
+             self.send_header("Content-Type", ctype)
+@@ -343,6 +424,8 @@ def _handler(hub):
+                     msg["rijen"] = msg["rijen"][:n - sent]
+                     if hub.control is not None:
+                         msg["bediening"] = dict(hub.control.state, mag_starten=local)
++                    det = _detector()
++                    msg["obstakel"] = det.info() if det is not None else None
+                     self.wfile.write(f"data: {json.dumps(msg, separators=(',', ':'))}\n\n".encode())
+                     self.wfile.flush()
+                     sent = n
+diff --git a/parcours.py b/parcours.py
+index 65cef7c..e92f406 100644
+--- a/parcours.py
++++ b/parcours.py
+@@ -8,14 +8,29 @@ Rijden gebruikt de slipbewuste odometrie (zoals fase1_heen_en_terug.py), draaien
+ Na een draai volgt de robot de nieuwe koers; opeenvolgende rechte stukken blijven op dezelfde lijn.
+ Daarna: python analyse_rit.py, en het dashboard toont de geplande en de gereden route.
+ Draaien is zo juist als de gyroschaal: kalibreer eerst met  python test_sondewiel.py draai.
++
++Obstakels (obstakel.py, als de camera gekalibreerd is): de robot remt af en stopt voor wat hij ziet,
++en gaat dan verder met het parcours:
++  - wacht tot 4 s: loopt iemand weg, dan rijdt hij gewoon door;
++  - is er naast het obstakel vrije vloer: omweg (45° opzij, voorbij, terug op de lijn) en verder;
++  - anders (muur dwars over de weg, bv. de afstand te groot geschat): deze stap eindigt hier en
++    de rest van het parcours schuift mee.
+ """
+ import argparse
+ import math
++import time
+ 
+-from fase1_heen_en_terug import add_drive_args, positive_seconds, prepare, robot_session
++from fase1_heen_en_terug import CameraWeg, Obstakel, add_drive_args, positive_seconds, prepare, robot_session
+ 
+ EINDKOERS_TOL = 3.0   # graden: grotere koersfout na de laatste stap wordt ter plaatse rechtgezet
+ MAX_CORRECTIE = 0.5   # m: grotere correctie voor de vorige stappen vertrouwen we niet (bv. haperende odometrie)
++OBST_WACHT_S = 4.0    # s wachten of een obstakel (iemand) wegloopt
++OBST_VRIJ_M = 1.0     # m: zoveel verder dan de stopafstand moet de weg vrij zijn om door te rijden
++OMWEG_TERUG = 0.5     # m eerst achteruit (daar kwam hij net vandaan): ruimte om opzij te draaien
++OMWEG_HOEK = 45.0     # graden opzij voor een omweg
++OMWEG_ZIJ = 0.9       # m zijwaarts: halve robot + half obstakel + marge
++OMWEG_VOORBIJ = 1.2   # m rechtdoor naast het obstakel (de diepte ziet de camera niet)
++MAX_OMWEGEN = 2       # per stap; daarna eindigt de stap aan het obstakel
+ STAPPEN = {"vooruit": "vooruit", "v": "vooruit", "achteruit": "achteruit", "a": "achteruit",
+            "links": "links", "l": "links", "rechts": "rechts", "r": "rechts"}
+ 
+@@ -86,7 +101,8 @@ def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=6
+ 
+ def rechtdoor(robot, start, planned, power, turn_power, ramp, creep, tolerance):
+     """Eén rechte stap van het geplande hoekpunt `start` over `planned` m (− = achteruit) op de
+-    gewenste koers. Geeft het geplande hoekpunt terug."""
++    gewenste koers. Geeft het hoekpunt terug van waaruit het parcours verdergaat: het geplande,
++    of de plek op de lijn waar de stap voor een obstakel eindigde."""
+     heading = robot.target_heading
+     h = math.radians(heading)
+     ux, uy = math.cos(h), math.sin(h)
+@@ -103,11 +119,76 @@ def rechtdoor(robot, start, planned, power, turn_power, ramp, creep, tolerance):
+         print(f"{robot.phase}: gepland {planned:+.3f} m, te rijden {togo:+.3f} m "
+               f"(correctie {(togo - planned) * 100:+.1f} cm voor de vorige stappen)")
+     end = (start[0] + planned * ux, start[1] + planned * uy)
+-    robot.target_heading, robot.line = heading, start   # de geplande lijn
+-    togo = planned - along()
+-    robot.drive_distance(power if togo >= 0 else -power, abs(togo), ramp, creep, tolerance=tolerance / 1000)
+-    return end
+-
++    detours = waits = 0
++    while True:
++        robot.target_heading, robot.line = heading, start   # de geplande lijn
++        togo = planned - along()
++        try:
++            robot.drive_distance(power if togo >= 0 else -power, abs(togo), ramp, creep, tolerance=tolerance / 1000)
++            return end
++        except CameraWeg:
++            raise                                       # blind: niet verder rijden
++        except Obstakel as e:
++            robot.hold(0.3)
++            robot.melding(f"{robot.phase}: {e}")
++        det = robot.obstacle
++        if waits < 3 and wait_clear(robot):             # iemand liep weg
++            waits += 1
++            robot.melding(f"{robot.phase}: weg vrij, verder")
++            continue
++        side = det.free_side((det.dist or 0) + OBST_VRIJ_M)
++        rest = planned - along()
++        if side and detours < MAX_OMWEGEN and rest > det.stop + OBST_VRIJ_M:   # anders ligt het doel vlak achter het obstakel
++            detours += 1
++            try:
++                detour(robot, side, heading, power, turn_power, ramp, creep, tolerance)
++                continue
++            except CameraWeg:
++                raise
++            except Obstakel as e:
++                robot.hold(0.3)
++                robot.melding(f"{robot.phase}: omweg lukt niet ({e})")
++        # Muur dwars over de weg of geen omweg mogelijk: de stap eindigt hier, het parcours gaat verder.
++        if abs(robot.target_heading - heading) > 0.5:
++            robot.turn(heading - robot.target_heading, turn_power, label="OMWEG")
++        a = along()
++        robot.melding(f"{robot.phase}: stap ingekort tot {a:.2f} m van {planned:.2f} m (obstakel); "
++                      "het parcours gaat verder vanaf hier")
++        robot.target_heading = heading
++        return start[0] + a * ux, start[1] + a * uy
++
++
++def wait_clear(robot):
++    """Tot OBST_WACHT_S stilstaan; True als de weg vrij komt (bv. iemand loopt weg)."""
++    det = robot.obstacle
++    robot.melding(f"{robot.phase}: obstakel op {det.dist:.1f} m, even wachten…" if det.dist else f"{robot.phase}: even wachten…")
++    t0 = time.monotonic()
++    while time.monotonic() - t0 < OBST_WACHT_S:
++        robot.hold(0.2)
++        d, age = det.latest()
++        if age < 1.0 and (d is None or d > det.stop + OBST_VRIJ_M):
++            return True
++    return False
++
++
++def detour(robot, side, heading, power, turn_power, ramp, creep, tolerance):
++    """Omweg: OMWEG_TERUG achteruit, OMWEG_HOEK opzij, OMWEG_ZIJ zijwaarts, OMWEG_VOORBIJ voorbij, terug
++    op de lijn en weer op de gewenste koers. Elk vooruit stuk let zelf op obstakels (Obstakel als daar
++    ook iets staat). Zonder die eerste stap achteruit staat het obstakel na het opzij draaien nog
++    in de weg (simulatie: tas van 0,4 m op 0,6 m)."""
++    s = 1 if side == "links" else -1
++    phase = robot.phase
++    diag = OMWEG_ZIJ / math.sin(math.radians(OMWEG_HOEK))
++    robot.melding(f"{phase}: omweg {side} om het obstakel")
++    robot.phase = f"{phase}-omweg"
++    try:
++        robot.drive_distance(-power, OMWEG_TERUG, ramp, creep, tolerance=tolerance / 1000)
++        for angle, dist in ((s * OMWEG_HOEK, diag), (-s * OMWEG_HOEK, OMWEG_VOORBIJ), (-s * OMWEG_HOEK, diag)):
++            robot.turn(angle, turn_power, label="OMWEG")
++            robot.drive_distance(power, dist, ramp, creep, tolerance=tolerance / 1000)
++        robot.turn(heading - robot.target_heading, turn_power, label="OMWEG")
++    finally:
++        robot.phase = phase
+ 
+ if __name__ == "__main__":
+     main()
