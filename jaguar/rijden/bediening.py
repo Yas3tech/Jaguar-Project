@@ -13,10 +13,13 @@ import sys
 import threading
 
 from jaguar.live import view as live_view
+from jaguar.navigatie.route import boog_naar_stappen
 from jaguar.kern.robot import ROBOT_IP, ROBOT_PORT, Aborted, prepare, robot_session
 from jaguar.rijden.parcours import STAPPEN, rijd
 
-MAX_STAPPEN = 30
+MAX_STAPPEN = 40         # wat de gebruiker opgeeft; een boog telt als één stap
+MAX_UITGEROLD = 400      # na het uitrollen van bogen in korte stukjes
+MAX_RADIUS = 30.0
 MAX_METER = 20.0      # per stap; langer is eerder een tikfout
 MAX_GRADEN = 720.0
 MAX_POWER = 600       # bovengrens vanaf de pagina (≈ 1,9 m/s); hoger kan alleen met parcours.py
@@ -59,14 +62,22 @@ class Control:
             raise ValueError(f"Hoogstens {MAX_STAPPEN} stappen.")
         stappen = []
         for item in raw["stappen"]:
-            if not (isinstance(item, list) and len(item) == 2 and item[0] in STAPPEN
-                    and isinstance(item[1], (int, float)) and not isinstance(item[1], bool)):
+            getal = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
+            if isinstance(item, list) and len(item) == 3 and item[0] == "boog" and getal(item[1]) and getal(item[2]):
+                radius, hoek = float(item[1]), float(item[2])      # hoek: + = naar links
+                if not 0.1 <= radius <= MAX_RADIUS or not 0 < abs(hoek) <= MAX_GRADEN:
+                    raise ValueError(f"boog {radius:g} m, {hoek:g}°: radius 0,1 tot {MAX_RADIUS:g} m, hoek tot {MAX_GRADEN:g}°.")
+                stappen.extend(boog_naar_stappen(radius, hoek))
+                continue
+            if not (isinstance(item, list) and len(item) == 2 and item[0] in STAPPEN and getal(item[1])):
                 raise ValueError(f"Ongeldige stap: {item!r}")
             soort, value = STAPPEN[item[0]], float(item[1])
             limit = MAX_METER if soort in ("vooruit", "achteruit") else MAX_GRADEN
             if not 0 < value <= limit:
                 raise ValueError(f"{soort} {value:g}: moet tussen 0 en {limit:g} liggen.")
             stappen.append((soort, value))
+        if len(stappen) > MAX_UITGEROLD:
+            raise ValueError(f"Hoogstens {MAX_UITGEROLD} stappen na het uitrollen van bogen.")
         power = raw.get("power", 250)
         if not isinstance(power, int) or isinstance(power, bool) or not 50 <= power <= MAX_POWER:
             raise ValueError(f"Vermogen moet tussen 50 en {MAX_POWER} liggen.")

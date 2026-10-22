@@ -76,6 +76,7 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 .opt-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 14px; }
 /* Rijden */
 #dlg-rit { width: min(600px, 96vw); max-height: 92vh; }
+#dlg-ontwerp { width: min(1500px, 98vw); height: 94vh; }
 .btn.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-size: 15px; padding: 7px 22px; letter-spacing: .05em; }
 .steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
 .steps li { padding-left: 4px; }
@@ -117,6 +118,14 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
       <button id="b-close" class="btn ghost" aria-label="Sluiten">Sluiten</button>
     </div>
     <iframe id="dlg-frame" title="Dashboard van de rit"></iframe>
+  </dialog>
+
+  <dialog id="dlg-ontwerp" aria-labelledby="ontwerp-title">
+    <div class="dlg-head">
+      <h2 id="ontwerp-title">Parcours ontwerpen</h2>
+      <button id="b-ontwerp-close" class="btn ghost">Sluiten</button>
+    </div>
+    <iframe id="ontwerp-frame" title="Parcours ontwerpen" allow="geolocation"></iframe>
   </dialog>
 
   <dialog id="dlg-rit" aria-labelledby="rit-title">
@@ -247,6 +256,7 @@ function controlState(b) {
   $("b-rit").hidden = !b || !b.mag_starten || b.bezig;
   $("b-stop").hidden = !b || !b.bezig;
   if (b?.bezig && $("dlg-rit").open) $("dlg-rit").close();
+  if (b?.bezig && $("dlg-ontwerp").open) $("dlg-ontwerp").close();
   const key = b && !b.bezig ? `${b.resultaat}|${b.fout}` : null;
   if (key !== lastResult) {
     lastResult = key;
@@ -278,7 +288,17 @@ function summary() {
 for (const b of document.querySelectorAll("[data-add]"))
   b.onclick = () => { steps.push([b.dataset.add, KINDS[b.dataset.add][2]]); renderSteps(); };
 $("r-power").oninput = summary;
-$("b-rit").onclick = () => { $("rit-msg").textContent = ""; renderSteps(); $("dlg-rit").showModal(); };
+function openLijst() { $("rit-msg").textContent = ""; renderSteps(); $("dlg-rit").showModal(); }
+$("b-rit").onclick = () => {          // de ontwerper (binnen/buiten met simulatie); de eenvoudige lijst blijft bereikbaar via de ontwerper
+  const f = $("ontwerp-frame"); if (!f.getAttribute("src")) f.src = "/ontwerp";
+  $("dlg-ontwerp").showModal();
+};
+$("b-ontwerp-close").onclick = () => $("dlg-ontwerp").close();
+addEventListener("message", (e) => {  // berichten van de ontwerper (zelfde pagina-oorsprong)
+  if (e.origin !== location.origin) return;
+  if (e.data?.type === "rit-gestart") $("dlg-ontwerp").close();
+  if (e.data?.type === "lijst") { $("dlg-ontwerp").close(); openLijst(); }
+});
 $("b-rit-close").onclick = () => $("dlg-rit").close();
 $("b-go").onclick = async () => {
   const m = $("rit-msg");

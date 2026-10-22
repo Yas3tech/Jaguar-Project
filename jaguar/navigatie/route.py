@@ -38,3 +38,21 @@ def route_naar_stappen(punten, b0, lokaal=None, begin_koers=0.0):
 
 def beschrijf(stappen):
     return " → ".join(f"{s} {v:.2f} {'m' if s in ('vooruit', 'achteruit') else '°'}" for s, v in stappen)
+
+
+def boog_naar_stappen(radius, hoek, max_hoek=10.0):
+    """Een boog (radius in m, hoek in graden, + = naar links) als parcoursstappen: korte rechte stukjes met
+    kleine draaiingen. Het robot kan nog geen vloeiende boog rijden; de stukjes lopen langs de echte boog
+    (eerst een halve draai, dan telkens een hele, aan het eind weer een halve), dus het beginpunt, het eindpunt
+    en de eindkoers kloppen. Geeft [("links"|"rechts"|"vooruit", waarde), ...]."""
+    if radius <= 0 or hoek == 0:
+        raise ValueError("een boog heeft een radius en een hoek nodig")
+    n = max(1, math.ceil(abs(hoek) / max_hoek))
+    delta = hoek / n
+    akkoord = 2 * radius * math.sin(abs(math.radians(delta)) / 2)
+    kant = "links" if hoek > 0 else "rechts"
+    stappen = [(kant, abs(delta) / 2)]
+    for k in range(n):
+        stappen.append(("vooruit", akkoord))
+        stappen.append((kant, abs(delta) if k < n - 1 else abs(delta) / 2))
+    return stappen

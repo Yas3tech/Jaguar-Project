@@ -29,6 +29,7 @@ from jaguar.analyse.rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PAGE = HERE / "pagina.html"
+DESIGNER = HERE / "ontwerp.html"
 DASHBOARD = ROOT / "dashboard" / "dashboard.html"   # geschreven door rit.py
 OPTIONS_FILE = HERE / "opties.json"   # bewaard tussen de ritten
 PANELS = ("koers", "baan", "snelheid", "pitchroll", "gyro", "versnelling")
@@ -293,6 +294,8 @@ def _handler(hub):
                 if not DASHBOARD.exists():
                     return self.send_error(404, "Nog geen dashboard: klik eerst op Analyse.")
                 return self._send(200, "text/html; charset=utf-8", DASHBOARD.read_bytes())
+            if path == "/ontwerp":
+                return self._send(200, "text/html; charset=utf-8", DESIGNER.read_bytes())
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())   # ook /options: opent het opties-venster
 
         def do_POST(self):
@@ -308,7 +311,7 @@ def _handler(hub):
                 return self._json(403, {"fout": "Dit kan alleen op de laptop die met de robot verbonden is."})
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                raw = json.loads(self.rfile.read(min(length, 10_000)))
+                raw = json.loads(self.rfile.read(min(length, 60_000)))
             except ValueError:
                 return self._json(400, {"fout": "geen geldige JSON"})
             if self.path == "/options":

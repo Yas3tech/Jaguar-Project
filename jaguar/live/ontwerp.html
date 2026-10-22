@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parcours ontwerpen</title>
+<style>
+/* Parcours ontwerpen. Geen externe bibliotheken: alleen (optioneel) kaarttegels komen van internet. */
+:root {
+  --bg: #f3f5f4; --surface: #fcfdfc; --ink: #17201d; --ink-2: #4d5753; --ink-3: #7b8581;
+  --rule: #d9dfdc; --grid: #e6eae8; --grid2: #cfd7d3; --chip: #e4e9e7; --canvas: #f8faf9;
+  --accent: #2a78d6; --accent-2: #eb6834; --accent-3: #1f9e6a;
+  --good: #0a6e0a; --warn: #8a5a00; --bad: #b3261e;
+  --shadow: 0 1px 2px rgb(20 30 25 / .06), 0 8px 24px rgb(20 30 25 / .08);
+  --f-body: "Segoe UI", system-ui, sans-serif; --f-data: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121615; --surface: #1a1f1d; --ink: #eef2f0; --ink-2: #b9c2be; --ink-3: #87918d;
+    --rule: #2f3633; --grid: #222927; --grid2: #323a37; --chip: #2a312e; --canvas: #151a18;
+    --accent: #3987e5; --accent-2: #e0703f; --accent-3: #35b47f;
+    --good: #5fd35f; --warn: #fab219; --bad: #ff8a80; --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .35);
+    color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+.btn { font-weight: 600; font-size: 13px; padding: 7px 14px; border-radius: 8px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; transition: filter .15s, transform .05s; }
+.btn:hover:not(:disabled) { filter: brightness(1.08); } .btn:active:not(:disabled) { transform: translateY(1px); }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+.btn.ghost:hover:not(:disabled) { background: var(--chip); filter: none; }
+.btn.go { background: var(--accent-3); border-color: var(--accent-3); font-size: 14px; padding: 8px 20px; }
+.btn:disabled { cursor: default; background: var(--chip); border-color: var(--rule); color: var(--ink-3); }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+/* ---------- scherm 1: kaarten ---------- */
+#keuze { height: 100%; overflow: auto; padding: clamp(18px, 4vw, 48px); display: grid; align-content: center; justify-items: center; gap: 28px;
+  background: radial-gradient(900px 500px at 15% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+              radial-gradient(800px 500px at 100% 110%, color-mix(in srgb, var(--accent-3) 14%, transparent), transparent 60%), var(--bg); }
+#keuze h1 { margin: 0; font-size: clamp(26px, 4vw, 40px); font-weight: 650; letter-spacing: -.01em; text-align: center; }
+#keuze .lead { margin: 6px 0 0; color: var(--ink-2); font-size: 16px; text-align: center; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 22px; width: min(1100px, 100%); }
+.card { position: relative; text-align: left; padding: 0; border: 1px solid var(--rule); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); cursor: pointer;
+  overflow: hidden; display: grid; grid-template-rows: 210px auto; transition: transform .2s ease, box-shadow .2s ease, border-color .2s; }
+.card:hover { transform: translateY(-4px); border-color: var(--accent); box-shadow: 0 2px 4px rgb(20 30 25 / .08), 0 18px 40px rgb(20 30 25 / .16); }
+.card svg { width: 100%; height: 100%; display: block; }
+.card .tekst { padding: 18px 22px 22px; display: grid; gap: 8px; }
+.card h2 { margin: 0; font-size: 24px; font-weight: 650; display: flex; align-items: center; gap: 10px; }
+.card p { margin: 0; color: var(--ink-2); line-height: 1.45; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.tag { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--ink-2); font-weight: 600; }
+.card .ga { margin-top: 6px; color: var(--accent); font-weight: 650; display: inline-flex; gap: 6px; align-items: center; }
+.card:hover .ga span { transform: translateX(4px); } .card .ga span { transition: transform .2s; }
+.kleinlink { color: var(--ink-3); background: none; border: 0; cursor: pointer; text-decoration: underline; font-size: 13px; }
+
+/* ---------- scherm 2: ontwerper ---------- */
+#ontwerp { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+.balk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 14px; border-bottom: 1px solid var(--rule); background: var(--surface); }
+.balk h1 { margin: 0 6px 0 0; font-size: 17px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.badge { font-size: 12px; font-weight: 650; padding: 3px 10px; border-radius: 999px; color: #fff; background: var(--accent); }
+.badge.buiten { background: var(--accent-3); }
+.balk .ruimte { flex: 1; }
+.werk { display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0; }
+@media (max-width: 900px) { .werk { grid-template-columns: 1fr; grid-template-rows: minmax(300px, 55%) 1fr; } body { overflow: auto; } }
+.vlak { position: relative; min-height: 0; background: var(--canvas); }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+#cv.pan { cursor: grabbing; } #cv.grab { cursor: grab; } #cv.draai { cursor: alias; }
+.hulp { position: absolute; left: 12px; top: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px;
+  box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink-2); max-width: min(380px, 80%); line-height: 1.5; backdrop-filter: blur(6px); }
+.hulp b { color: var(--ink); } kbd { font-family: var(--f-data); font-size: 11px; background: var(--chip); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; }
+.zweef { position: absolute; right: 12px; top: 12px; display: grid; gap: 6px; }
+.zweef button { width: 36px; height: 36px; border-radius: 9px; border: 1px solid var(--rule); background: var(--surface); box-shadow: var(--shadow); cursor: pointer; font-size: 18px; line-height: 1; }
+.zweef button:hover { background: var(--chip); }
+.sim { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--rule); border-radius: 12px; padding: 8px 12px; box-shadow: var(--shadow); backdrop-filter: blur(6px); }
+.sim input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
+.sim .tijd { font-family: var(--f-data); font-size: 12px; color: var(--ink-2); min-width: 108px; text-align: right; }
+.sim .stap { font-size: 12.5px; color: var(--ink-2); min-width: 150px; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sim select { padding: 4px 6px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.sim .rond { width: 36px; height: 36px; border-radius: 50%; padding: 0; font-size: 14px; }
+#kaartmelding { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--warn); color: var(--warn);
+  border-radius: 10px; padding: 8px 14px; font-size: 12.5px; box-shadow: var(--shadow); max-width: 80%; text-align: center; }
+.rechts { border-left: 1px solid var(--rule); background: var(--surface); overflow-y: auto; min-height: 0; padding: 14px; display: grid; gap: 16px; align-content: start; }
+@media (max-width: 900px) { .rechts { border-left: 0; border-top: 1px solid var(--rule); } }
+.rechts section { display: grid; gap: 8px; }
+.rechts h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 650; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.stat { background: var(--bg); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 10px; }
+.stat .k { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; } .stat .v small { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+.veld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.veld label { color: var(--ink-2); }
+input[type=number], input[type=text], select.v { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 7px; background: var(--surface); width: 100%; }
+input[type=number] { font-variant-numeric: tabular-nums; }
+.stukken { display: grid; gap: 8px; }
+.stuk { border: 1px solid var(--rule); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; background: var(--bg); }
+.stuk.fout { border-color: var(--bad); }
+.stuk .kop { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.stuk .kop i { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-style: normal; font-size: 12px; display: grid; place-items: center; }
+.stuk .kop button { margin-left: auto; border: 0; background: none; cursor: pointer; color: var(--ink-3); font-size: 18px; line-height: 1; }
+.stuk .kop button:hover { color: var(--bad); }
+.stuk .rij { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stuk .rij label { display: grid; gap: 2px; font-size: 11px; color: var(--ink-3); }
+.melding { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; margin: 0; }
+.melding.bad { color: var(--bad); } .melding.warn { color: var(--warn); } .melding.ok { color: var(--good); }
+.cmd { font-family: var(--f-data); font-size: 11.5px; background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 8px; word-break: break-all; color: var(--ink-2); max-height: 90px; overflow: auto; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 5px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+dialog { border: 1px solid var(--rule); border-radius: 14px; background: var(--surface); color: var(--ink); padding: 0; width: min(480px, 94vw); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgb(0 0 0 / .5); }
+dialog .inh { padding: 18px 20px; display: grid; gap: 12px; } dialog h2 { margin: 0; font-size: 18px; }
+dialog ul { margin: 0; padding-left: 20px; color: var(--ink-2); line-height: 1.6; }
+dialog .knoppen { display: flex; gap: 10px; justify-content: flex-end; }
+label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; } label.vink input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ============ scherm 1: kaarten ============ -->
+<main id="keuze">
+  <div>
+    <h1>Parcours ontwerpen</h1>
+    <p class="lead">Kies waar het robot gaat rijden. Je tekent de route, ziet een simulatie en start dan pas.</p>
+  </div>
+  <div class="cards">
+    <button class="card" id="k-binnen" aria-label="Binnen rijden: teken op een raster in meters">
+      <svg viewBox="0 0 400 210" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="gb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dbe9fb"/><stop offset="1" stop-color="#eef4fd"/></linearGradient>
+          <pattern id="pb" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#9fbde3" stroke-width=".7" opacity=".7"/></pattern>
+        </defs>
+        <rect width="400" height="210" fill="url(#gb)"/><rect width="400" height="210" fill="url(#pb)"/>
+        <rect x="26" y="22" width="348" height="166" rx="6" fill="none" stroke="#6b8fbf" stroke-width="3"/>
+        <rect x="26" y="88" width="12" height="40" fill="#dbe9fb"/>
+        <path d="M70 160 L70 100 Q70 62 108 62 L230 62 Q268 62 268 100 L268 130 L330 130" fill="none" stroke="#2a78d6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 0"/>
+        <g transform="translate(70 160)"><rect x="-13" y="-16" width="26" height="32" rx="5" fill="#17201d"/><path d="M0 -26 L8 -14 L-8 -14 Z" fill="#eb6834"/></g>
+        <circle cx="330" cy="130" r="7" fill="#1f9e6a"/>
+        <text x="312" y="182" font-family="Segoe UI, sans-serif" font-size="12" fill="#4d6a8f">1 m</text><path d="M335 172 H355" stroke="#4d6a8f" stroke-width="2"/>
+      </svg>
+      <div class="tekst">
+        <h2>Binnen</h2>
+        <p>Teken op een raster in echte meters. Het robot rijdt op zijn wielen en gyro, dus je hebt geen GPS nodig.</p>
+        <div class="tags"><span class="tag">Raster in meters</span><span class="tag">Zonder GPS</span><span class="tag">Bogen</span></div>
+        <span class="ga">Ontwerp een route <span>→</span></span>
+      </div>
+    </button>
+    <button class="card" id="k-buiten" aria-label="Buiten rijden: teken op een kaart">
+      <svg viewBox="0 0 400 210" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dff1e4"/><stop offset="1" stop-color="#f1f8f1"/></linearGradient></defs>
+        <rect width="400" height="210" fill="url(#gg)"/>
+        <path d="M-10 150 C80 120 120 190 200 160 S340 90 410 120" fill="none" stroke="#fff" stroke-width="16"/>
+        <path d="M-10 150 C80 120 120 190 200 160 S340 90 410 120" fill="none" stroke="#c9d7cc" stroke-width="1.5"/>
+        <path d="M240 -10 C250 40 210 70 230 120 S280 190 270 220" fill="none" stroke="#a9d3ef" stroke-width="20" opacity=".85"/>
+        <g fill="#b7dcc0"><rect x="30" y="20" width="70" height="46" rx="8"/><rect x="120" y="30" width="50" height="34" rx="8"/><rect x="300" y="150" width="70" height="40" rx="8"/><rect x="40" y="168" width="60" height="30" rx="8"/></g>
+        <g fill="#e7e2d4"><rect x="320" y="30" width="46" height="34" rx="4"/><rect x="176" y="86" width="36" height="24" rx="4"/></g>
+        <path d="M84 150 C120 100 170 120 200 88 S290 60 330 96" fill="none" stroke="#1f9e6a" stroke-width="5" stroke-linecap="round"/>
+        <g transform="translate(84 150)"><circle r="9" fill="#17201d"/><path d="M0 -20 L7 -9 L-7 -9 Z" fill="#eb6834"/></g>
+        <g transform="translate(330 96)"><path d="M0 0 C-14 -16 -14 -34 0 -34 C14 -34 14 -16 0 0Z" fill="#b3261e"/><circle cy="-23" r="5" fill="#fff"/></g>
+      </svg>
+      <div class="tekst">
+        <h2>Buiten</h2>
+        <p>Teken op een kaart of satelliet. Je krijgt de GPS-coördinaten van elk punt en kiest de richting van het noorden.</p>
+        <div class="tags"><span class="tag">Kaart</span><span class="tag">Coördinaten</span><span class="tag">Richting</span></div>
+        <span class="ga">Ontwerp een route <span>→</span></span>
+      </div>
+    </button>
+  </div>
+  <button class="kleinlink" id="k-lijst">Liever een eenvoudige lijst met stappen (vooruit, links …)?</button>
+</main>
+
+<!-- ============ scherm 2: ontwerper ============ -->
+<div id="ontwerp" hidden>
+  <div class="balk">
+    <button class="btn ghost" id="b-terug">← Kiezen</button>
+    <h1>Parcours <span class="badge" id="badge">Binnen</span></h1>
+    <button class="btn ghost" id="b-undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
+    <button class="btn ghost" id="b-wis">Wissen</button>
+    <span class="ruimte"></span>
+    <span class="melding" id="status" role="status"></span>
+    <button class="btn go" id="b-start">Start rit…</button>
+  </div>
+  <div class="werk">
+    <div class="vlak" id="vlak">
+      <canvas id="cv" aria-label="Tekenvlak voor het parcours"></canvas>
+      <div class="hulp" id="hulp"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen ·
+        rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</div>
+      <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
+      <div id="kaartmelding" hidden></div>
+      <div class="sim">
+        <button class="btn rond" id="s-play" aria-label="Simulatie afspelen">▶</button>
+        <button class="btn ghost rond" id="s-reset" aria-label="Terug naar het begin">↺</button>
+        <input type="range" id="s-tijd" min="0" max="1000" value="0" aria-label="Tijd in de simulatie">
+        <span class="stap" id="s-stap">simulatie</span>
+        <span class="tijd" id="s-t">0:00 / 0:00</span>
+        <select id="s-snel" aria-label="Snelheid van de simulatie"><option value="1">×1</option><option value="2" selected>×2</option><option value="4">×4</option><option value="8">×8</option></select>
+      </div>
+    </div>
+    <aside class="rechts">
+      <section>
+        <h3>Overzicht</h3>
+        <div class="stats">
+          <div class="stat"><div class="k">Lengte</div><div class="v" id="st-len">–</div></div>
+          <div class="stat"><div class="k">Geschatte tijd</div><div class="v" id="st-tijd">–</div></div>
+          <div class="stat"><div class="k">Ruimte nodig</div><div class="v" id="st-ruimte">–</div></div>
+          <div class="stat"><div class="k">Draaien · bogen</div><div class="v" id="st-draai">–</div></div>
+        </div>
+        <p class="melding" id="plan-msg"></p>
+      </section>
+      <section id="sec-buiten" hidden>
+        <h3>Kaart en start</h3>
+        <div class="seg" role="group" aria-label="Kaartlaag"><button id="l-osm" aria-pressed="true">Kaart</button><button id="l-sat" aria-pressed="false">Satelliet</button></div>
+        <div class="veld"><label for="i-lat">Breedtegraad start</label><input id="i-lat" type="number" step="0.000001" style="width:130px"></div>
+        <div class="veld"><label for="i-lon">Lengtegraad start</label><input id="i-lon" type="number" step="0.000001" style="width:130px"></div>
+        <button class="btn ghost" id="b-loc">Mijn locatie gebruiken</button>
+        <div class="veld"><label for="i-b0">Het robot kijkt bij de start naar (° van het noorden)</label><input id="i-b0" type="number" step="1" min="0" max="359" style="width:80px"></div>
+        <p class="melding">Het startpunt is (0, 0). Sleep op de kaart het oranje handvat om de richting te kiezen. Zet het robot precies zo neer. Het GPS van het robot is te ruw (3 tot 15 m) om de route op te sturen: de route wordt gereden met de wielen en de gyro.</p>
+      </section>
+      <section id="sec-binnen">
+        <h3>Richting bij de start</h3>
+        <div class="seg" role="group" aria-label="Richting van het robot bij de start">
+          <button data-b0="0" aria-pressed="true">↑ boven</button><button data-b0="90" aria-pressed="false">→ rechts</button>
+          <button data-b0="180" aria-pressed="false">↓ onder</button><button data-b0="270" aria-pressed="false">← links</button></div>
+        <p class="melding">Zet het robot op de groene start, met de neus in deze richting. Het raster is in echte meters.</p>
+      </section>
+      <section>
+        <h3>Stukken</h3>
+        <div class="stukken" id="stukken"></div>
+        <p class="melding" id="stukken-leeg">Klik op het vlak om het eerste punt te zetten. Elke klik is een nieuw punt.</p>
+      </section>
+      <section>
+        <h3>Rijden</h3>
+        <div class="veld"><label for="i-pw">Vermogen (50 tot 600)</label><input id="i-pw" type="number" min="50" max="600" step="10" style="width:90px"></div>
+        <p class="melding" id="pw-msg"></p>
+        <label class="vink"><input type="checkbox" id="c-breed" checked> Breedte van het robot tonen</label>
+      </section>
+      <section>
+        <h3>Bewaren</h3>
+        <div class="veld"><input id="i-naam" type="text" placeholder="Naam van de route" maxlength="40"><button class="btn ghost" id="b-bewaar">Bewaar</button></div>
+        <div class="veld"><select class="v" id="s-lijst" aria-label="Bewaarde routes"></select><span><button class="btn ghost" id="b-laad">Laad</button> <button class="btn ghost" id="b-weg">×</button></span></div>
+      </section>
+      <section>
+        <h3>Commando</h3>
+        <div class="cmd" id="cmd"></div>
+        <button class="btn ghost" id="b-kopieer">Kopieer</button>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<dialog id="dlg-start" aria-labelledby="ds-titel">
+  <div class="inh">
+    <h2 id="ds-titel">Start de rit</h2>
+    <p class="melding" id="ds-samen"></p>
+    <ul>
+      <li>Zet het robot op de start met de neus in de getekende richting.</li>
+      <li>Houd <b>vrije ruimte</b> rond de route: <span id="ds-ruimte"></span>.</li>
+      <li>De noodstop is binnen handbereik. Tijdens de rit stopt de rode knop STOP (of de spatiebalk).</li>
+    </ul>
+    <label class="vink"><input type="checkbox" id="ds-ok"> Het robot staat goed en de ruimte is vrij</label>
+    <p class="melding bad" id="ds-fout"></p>
+    <div class="knoppen"><button class="btn ghost" id="ds-nee">Annuleren</button><button class="btn go" id="ds-ja" disabled>Rijden</button></div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const RAD = Math.PI / 180, DEG = 180 / Math.PI;
+const ROBOT = { l: 0.615, b: 0.573 };                // meter
+const K_V = 0.0031, MAX_POWER = 600, SPIN = 70;      // m/s per vermogenseenheid, draaisnelheid ongeveer (°/s)
+const nl = (v, d = 2) => (v == null || !isFinite(v)) ? "–" : v.toFixed(d).replace(".", ",").replace(/^-(?=0[,.]?0*$)/, "").replace(/^-/, "−");
+const ang = (a) => { a = ((a + 180) % 360 + 360) % 360 - 180; return a === -180 ? 180 : a; };
+const KEY = "jaguar-ontwerp-v2", LIJST = "jaguar-routes-v2";
+
+/* ------------------------------------------------------------------ staat */
+const fresh = () => ({ modus: null, pts: [{ x: 0, y: 0, r: 0 }], b0: 0, power: 250, breed: true,
+  view: { cx: 0, cy: 0, ppm: 70 }, kaart: { lat: 50.8418, lon: 4.3230, laag: "osm" } });
+let S = fresh();
+try { const o = JSON.parse(localStorage.getItem(KEY)); if (o && Array.isArray(o.pts) && o.pts.length) S = Object.assign(fresh(), o, { view: Object.assign(fresh().view, o.view), kaart: Object.assign(fresh().kaart, o.kaart) }); } catch {}
+let hist = [];
+const bewaar = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const snapshot = () => { hist.push(JSON.stringify({ pts: S.pts, b0: S.b0 })); if (hist.length > 80) hist.shift(); };
+function undo() { const h = hist.pop(); if (!h) return; Object.assign(S, JSON.parse(h)); sync(); }
+
+/* --------------------------------------------------------------- planning */
+// Punten (x oost/rechts, y noord/boven) in meters, pts[0] = start (0,0). pts[i].r = radius van de bocht bij punt i (0 = draaien ter plaatse).
+// Hoeken: wiskundig (graden tegen de klok in, 0 = naar rechts); kompaskoers b0 = 90 − hoek.
+function plan(pts = S.pts, b0 = S.b0, power = S.power) {
+  const out = { stappen: [], poly: [], acties: [], fouten: [], lengte: 0, draaien: 0, bogen: 0, tijd: 0, bbox: null, tl: [] };
+  const m = pts.length - 1;
+  if (m < 1) return out;
+  const leg = [];
+  for (let j = 0; j < m; j++) {
+    const dx = pts[j + 1].x - pts[j].x, dy = pts[j + 1].y - pts[j].y;
+    leg.push({ len: Math.hypot(dx, dy), phi: Math.atan2(dy, dx) * DEG, ux: dx, uy: dy });
+  }
+  const tg = [], al = [];
+  for (let j = 0; j < m - 1; j++) {
+    const a = ang(leg[j + 1].phi - leg[j].phi), r = pts[j + 1].r || 0;
+    al.push(a);
+    tg.push(r > 0 && Math.abs(a) >= 0.5 && Math.abs(a) < 179.5 ? r * Math.tan(Math.abs(a) * RAD / 2) : 0);
+  }
+  let cur = 90 - b0, x = pts[0].x, y = pts[0].y;
+  const v = Math.max(0.05, K_V * power);
+  const addTurn = (to) => {
+    const d = ang(to - cur);
+    if (Math.abs(d) >= 0.5) {
+      out.stappen.push([d > 0 ? "links" : "rechts", +Math.abs(d).toFixed(2)]); out.draaien++;
+      out.acties.push({ k: "draai", van: cur, naar: cur + d, x, y, label: `Draai ${d > 0 ? "links" : "rechts"} ${nl(Math.abs(d), 0)}°` });
+    }
+    cur = to;
+  };
+  for (let j = 0; j < m; j++) {
+    const tin = j > 0 ? tg[j - 1] : 0, tout = j < m - 1 ? tg[j] : 0;
+    let L = leg[j].len - tin - tout;
+    if (L < -1e-6) out.fouten.push(`Stuk ${j + 1} is te kort voor de bogen: ${nl(tin + tout)} m nodig, ${nl(leg[j].len)} m beschikbaar.`);
+    L = Math.max(0, L);
+    if (!(j > 0 && tg[j - 1] > 0)) addTurn(leg[j].phi);
+    if (L > 0.005) {
+      const a = { x, y }, b = { x: x + L * Math.cos(leg[j].phi * RAD), y: y + L * Math.sin(leg[j].phi * RAD) };
+      out.stappen.push(["vooruit", +L.toFixed(3)]); out.lengte += L;
+      out.acties.push({ k: "lijn", a, b, h: leg[j].phi, len: L, label: `Rij ${nl(L)} m` });
+      x = b.x; y = b.y;
+    }
+    if (j < m - 1 && tg[j] > 0) {
+      const r = pts[j + 1].r, a = al[j], sign = a > 0 ? 1 : -1;
+      const nx = -Math.sin(leg[j].phi * RAD) * sign, ny = Math.cos(leg[j].phi * RAD) * sign;   // naar het midden
+      const cx = x + nx * r, cy = y + ny * r, a0 = Math.atan2(y - cy, x - cx);
+      const len = r * Math.abs(a) * RAD;
+      out.stappen.push(["boog", +r.toFixed(3), +a.toFixed(2)]); out.bogen++; out.lengte += len;
+      out.acties.push({ k: "boog", cx, cy, r, a0, a, h0: leg[j].phi, len, label: `Boog ${nl(r)} m, ${nl(Math.abs(a), 0)}° ${a > 0 ? "links" : "rechts"}` });
+      const ex = cx + r * Math.cos(a0 + a * RAD), ey = cy + r * Math.sin(a0 + a * RAD);
+      x = ex; y = ey; cur = leg[j + 1].phi;
+    }
+  }
+  // tekenpad
+  for (const ac of out.acties) {
+    if (ac.k === "lijn") { out.poly.push({ x: ac.a.x, y: ac.a.y }, { x: ac.b.x, y: ac.b.y }); }
+    if (ac.k === "boog") { const n = Math.max(4, Math.ceil(Math.abs(ac.a) / 4)); for (let i = 0; i <= n; i++) { const t = ac.a0 + ac.a * RAD * i / n; out.poly.push({ x: ac.cx + ac.r * Math.cos(t), y: ac.cy + ac.r * Math.sin(t) }); } }
+  }
+  if (!out.poly.length) out.poly.push({ x: pts[0].x, y: pts[0].y });
+  // ruimte
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const q of out.poly.concat(pts.map((p) => ({ x: p.x, y: p.y })))) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+  out.bbox = { x0, x1, y0, y1 };
+  // tijdlijn, zoals het robot rijdt: eerst 4 s rustmeting, daarna elke stap met 1 s pauze. Een boog gaat in stukjes van 10°.
+  let t = 4;
+  const PAUZE = 1, add = (d, ac, f) => { out.tl.push({ t0: t, t1: t + d, ac, f }); t += d; };
+  const cyc = (len, nTurn) => len / v + 1.8 + (nTurn ? 10 / SPIN + 1.2 : 0) + 2 * PAUZE;
+  let first = true, prevH = 90 - b0;
+  for (const ac of out.acties) {
+    if (!first) t += PAUZE;
+    first = false;
+    if (ac.k === "draai") { const d = Math.abs(ac.naar - ac.van) / SPIN + 1.2; add(d, ac, (u) => ({ x: ac.x, y: ac.y, h: ac.van + (ac.naar - ac.van) * u })); prevH = ac.naar; }
+    else if (ac.k === "lijn") { const d = ac.len / v + 2.0; add(d, ac, (u) => ({ x: ac.a.x + (ac.b.x - ac.a.x) * u, y: ac.a.y + (ac.b.y - ac.a.y) * u, h: ac.h })); }
+    else { const n = Math.max(1, Math.ceil(Math.abs(ac.a) / 10)); const d = n * cyc(2 * ac.r * Math.sin(Math.abs(ac.a) / n * RAD / 2), true);
+      add(d, ac, (u) => { const th = ac.a0 + ac.a * RAD * u; return { x: ac.cx + ac.r * Math.cos(th), y: ac.cy + ac.r * Math.sin(th), h: ac.h0 + ac.a * u }; }); }
+  }
+  out.tijd = t + 2;
+  return out;
+}
+function posOp(P, t) {
+  if (!P.tl.length) return { x: S.pts[0].x, y: S.pts[0].y, h: 90 - S.b0, label: "start" };
+  const first = P.tl[0];
+  if (t <= first.t0) { const a = P.acties[0]; return { x: S.pts[0].x, y: S.pts[0].y, h: 90 - S.b0, label: t < 3 ? "rustmeting" : "klaar voor de start" }; }
+  let last = null;
+  for (const e of P.tl) {
+    if (t >= e.t0 && t <= e.t1) { const u = (t - e.t0) / (e.t1 - e.t0 || 1); return Object.assign(e.f(u), { label: e.ac.label }); }
+    if (t > e.t1) last = e;
+  }
+  const e = last || first, p = e.f(1);
+  return Object.assign(p, { label: t >= P.tijd - 2 ? "klaar" : "pauze" });
+}
+
+/* ------------------------------------------------------------ weergave */
+const cv = $("cv"), ctx = cv.getContext("2d");
+let W = 300, H = 300, dpr = 1, P = plan(), simT = 0, spelen = false, tPrev = 0, dirty = true;
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const toS = (x, y) => [W / 2 + (x - S.view.cx) * S.view.ppm, H / 2 - (y - S.view.cy) * S.view.ppm];
+const toW = (sx, sy) => [S.view.cx + (sx - W / 2) / S.view.ppm, S.view.cy - (sy - H / 2) / S.view.ppm];
+function resize() {
+  dpr = window.devicePixelRatio || 1; const r = cv.getBoundingClientRect();
+  W = Math.max(50, r.width); H = Math.max(50, r.height);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); dirty = true;
+}
+new ResizeObserver(resize).observe($("vlak"));
+
+/* kaarttegels (alleen buiten; zonder internet blijft het raster werken) */
+const tegels = new Map(); let tegelFout = 0, tegelOk = 0, kaartT0 = 0;
+const LAGEN = { osm: { url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, bron: "© OpenStreetMap-bijdragers", max: 19 },
+                sat: { url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`, bron: "Esri World Imagery", max: 19 } };
+const meterPerGraad = (lat) => { const f = lat * RAD;
+  return { lat: 111132.954 - 559.822 * Math.cos(2 * f) + 1.175 * Math.cos(4 * f), lon: 111412.84 * Math.cos(f) - 93.5 * Math.cos(3 * f) + 0.118 * Math.cos(5 * f) }; };
+const naarLL = (x, y) => { const m = meterPerGraad(S.kaart.lat); return [S.kaart.lat + y / m.lat, S.kaart.lon + x / m.lon]; };
+function tekenTegels() {
+  const m = meterPerGraad(S.kaart.lat), laag = LAGEN[S.kaart.laag];
+  const [xa, yb] = toW(0, H), [xb, ya] = toW(W, 0);                 // oost-west, zuid-noord grenzen in meters
+  const lonA = S.kaart.lon + xa / m.lon, lonB = S.kaart.lon + xb / m.lon, latA = S.kaart.lat + yb / m.lat, latB = S.kaart.lat + ya / m.lat;
+  const z = Math.max(3, Math.min(laag.max, Math.round(Math.log2(S.view.ppm * 40075016.686 * Math.cos(S.kaart.lat * RAD) / 256))));
+  const n = 2 ** z, tx = (lon) => Math.floor((lon + 180) / 360 * n);
+  const ty = (lat) => Math.floor((1 - Math.log(Math.tan(lat * RAD) + 1 / Math.cos(lat * RAD)) / Math.PI) / 2 * n);
+  const x0 = Math.max(0, tx(lonA)), x1 = Math.min(n - 1, tx(lonB)), y0 = Math.max(0, ty(latB)), y1 = Math.min(n - 1, ty(latA));
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 60) return;
+  const lonOf = (X) => X / n * 360 - 180, latOf = (Y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * Y / n))) * DEG;
+  for (let X = x0; X <= x1; X++) for (let Y = y0; Y <= y1; Y++) {
+    const key = `${S.kaart.laag}/${z}/${X}/${Y}`;
+    let im = tegels.get(key);
+    if (!im) { im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => { tegelOk++; dirty = true; }; im.onerror = () => { tegelFout++; im.fout = true; dirty = true; }; im.src = laag.url(z, X, Y); tegels.set(key, im);
+      if (tegels.size > 400) tegels.delete(tegels.keys().next().value); }
+    if (!im.complete || im.fout || !im.naturalWidth) continue;
+    const [sx0, sy0] = toS((lonOf(X) - S.kaart.lon) * m.lon, (latOf(Y) - S.kaart.lat) * m.lat);
+    const [sx1, sy1] = toS((lonOf(X + 1) - S.kaart.lon) * m.lon, (latOf(Y + 1) - S.kaart.lat) * m.lat);
+    ctx.drawImage(im, sx0, sy0, sx1 - sx0 + 0.6, sy1 - sy0 + 0.6);
+  }
+}
+
+function tekenRaster() {
+  const ppm = S.view.ppm, buiten = S.modus === "buiten";
+  const stappen = [0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100]; const klein = stappen.find((s) => s * ppm >= 14) || 100, groot = stappen.find((s) => s * ppm >= 70) || 100;
+  const [xa, ya] = toW(0, H), [xb, yb] = toW(W, 0);
+  ctx.lineWidth = 1; ctx.font = `11px ${css("--f-data")}`; ctx.fillStyle = buiten && S.kaart.laag === "sat" ? "#fff" : css("--ink-3");
+  const lijnen = (st, kleur, alpha) => { ctx.strokeStyle = kleur; ctx.globalAlpha = alpha; ctx.beginPath();
+    for (let x = Math.ceil(xa / st) * st; x <= xb; x += st) { const [sx] = toS(x, 0); ctx.moveTo(Math.round(sx) + .5, 0); ctx.lineTo(Math.round(sx) + .5, H); }
+    for (let y = Math.ceil(ya / st) * st; y <= yb; y += st) { const [, sy] = toS(0, y); ctx.moveTo(0, Math.round(sy) + .5); ctx.lineTo(W, Math.round(sy) + .5); }
+    ctx.stroke(); ctx.globalAlpha = 1; };
+  lijnen(klein, buiten ? "#ffffff" : css("--grid"), buiten ? 0.18 : 1);
+  lijnen(groot, buiten ? "#ffffff" : css("--grid2"), buiten ? 0.35 : 1);
+  // assen met meters
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let x = Math.ceil(xa / groot) * groot; x <= xb; x += groot) { const [sx] = toS(x, 0); if (sx > 28 && sx < W - 10) ctx.fillText(`${nl(x, groot < 1 ? 1 : 0)} m`, sx, 6); }
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  for (let y = Math.ceil(ya / groot) * groot; y <= yb; y += groot) { const [, sy] = toS(0, y); if (sy > 26 && sy < H - 70) ctx.fillText(`${nl(y, groot < 1 ? 1 : 0)} m`, 6, sy - 8); }
+}
+
+function robotVorm(x, y, hDeg, kleur, alpha = 1) {
+  const [sx, sy] = toS(x, y), k = S.view.ppm; ctx.save(); ctx.translate(sx, sy); ctx.rotate(-hDeg * RAD); ctx.globalAlpha = alpha;
+  const l = ROBOT.l * k, b = ROBOT.b * k;
+  ctx.fillStyle = kleur; ctx.strokeStyle = "rgb(0 0 0 / .55)"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.roundRect(-l / 2, -b / 2, l, b, Math.min(8, b * .18)); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#eb6834"; ctx.beginPath(); ctx.moveTo(l / 2 + Math.min(12, l * .22), 0); ctx.lineTo(l / 2 - 3, -b * .26); ctx.lineTo(l / 2 - 3, b * .26); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "rgb(255 255 255 / .85)"; for (const dx of [-0.3, 0.3]) for (const dy of [-1, 1]) { ctx.beginPath(); ctx.roundRect(dx * l - l * .09, dy * b / 2 - (dy > 0 ? 0 : 0) - b * .08, l * .18, b * .16, 2); ctx.fill(); }
+  ctx.restore();
+}
+
+function teken() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = S.modus === "buiten" ? "#cfd9d2" : css("--canvas"); ctx.fillRect(0, 0, W, H);
+  if (S.modus === "buiten") tekenTegels();
+  tekenRaster();
+  const k = S.view.ppm, pts = S.pts;
+  // vrije ruimte
+  if (P.bbox && pts.length > 1) { const mg = 1, [a, b] = toS(P.bbox.x0 - mg, P.bbox.y1 + mg), [c, d] = toS(P.bbox.x1 + mg, P.bbox.y0 - mg);
+    ctx.setLineDash([6, 6]); ctx.strokeStyle = css("--warn"); ctx.lineWidth = 1.2; ctx.strokeRect(a, b, c - a, d - b); ctx.setLineDash([]); }
+  // breedte van het robot langs het pad
+  const pad = (c) => { ctx.beginPath(); P.poly.forEach((q, i) => { const [sx, sy] = toS(q.x, q.y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); };
+  if (S.breed && P.poly.length > 1) { pad(); ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = css("--accent"); ctx.globalAlpha = .16; ctx.lineWidth = Math.max(3, ROBOT.b * k); ctx.stroke(); ctx.globalAlpha = 1; }
+  // gewenste lijn: hoeken zonder radius ook tekenen (de ruwe verbinding), dun en gestippeld
+  if (pts.length > 1) { ctx.setLineDash([3, 5]); ctx.strokeStyle = css("--ink-3"); ctx.lineWidth = 1; ctx.beginPath(); pts.forEach((p, i) => { const [sx, sy] = toS(p.x, p.y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.stroke(); ctx.setLineDash([]); }
+  if (P.poly.length > 1) { pad(); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 3.5; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke(); }
+  // afgelegd deel in de simulatie
+  const pos = posOp(P, simT);
+  if (simT > 4 && P.poly.length > 1) {
+    ctx.strokeStyle = css("--accent-3"); ctx.lineWidth = 4.5; ctx.beginPath(); let started = false;
+    for (const e of P.tl) { if (e.t0 > simT) break; const u = Math.min(1, (simT - e.t0) / (e.t1 - e.t0 || 1)); if (e.ac.k === "draai") continue;
+      for (let i = 0; i <= 20; i++) { const q = e.f(u * i / 20); const [sx, sy] = toS(q.x, q.y); started ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); started = true; } }
+    ctx.stroke();
+  }
+  // punten
+  for (let i = 0; i < pts.length; i++) {
+    const [sx, sy] = toS(pts[i].x, pts[i].y);
+    if (i === 0) continue;
+    ctx.fillStyle = i === pts.length - 1 ? css("--accent-2") : css("--accent"); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 8, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = `bold 10px ${css("--f-body")}`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(i), sx, sy + .5);
+  }
+  // start + richting
+  const [s0x, s0y] = toS(0, 0), h0 = 90 - S.b0;
+  robotVorm(0, 0, h0, "#2b3431", simT > 0 ? 0.35 : 1);
+  ctx.fillStyle = css("--accent-3"); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(s0x, s0y, 6, 0, 7); ctx.fill(); ctx.stroke();
+  const hl = Math.max(46, 0.9 * k), hx = s0x + hl * Math.cos(h0 * RAD), hy = s0y - hl * Math.sin(h0 * RAD);
+  ctx.strokeStyle = css("--accent-2"); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s0x, s0y); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.fillStyle = css("--accent-2"); ctx.beginPath(); ctx.arc(hx, hy, 7, 0, 7); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.stroke();
+  handle.x = hx; handle.y = hy;
+  // simulatie
+  if (simT > 0) robotVorm(pos.x, pos.y, pos.h, css("--accent-2"), 0.95);
+  // schaalbalk
+  const bars = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100], bm = bars.find((s) => s * k >= 70) || 100;
+  ctx.strokeStyle = S.modus === "buiten" && S.kaart.laag === "sat" ? "#fff" : css("--ink-2"); ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(14, H - 22); ctx.lineTo(14 + bm * k, H - 22); ctx.moveTo(14, H - 27); ctx.lineTo(14, H - 17); ctx.moveTo(14 + bm * k, H - 27); ctx.lineTo(14 + bm * k, H - 17); ctx.stroke();
+  ctx.font = `12px ${css("--f-data")}`; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(`${nl(bm, bm < 1 ? 1 : 0)} m`, 14, H - 30);
+  if (S.modus === "buiten") { ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.font = `10px ${css("--f-body")}`; ctx.fillStyle = S.kaart.laag === "sat" ? "#fff" : css("--ink-3"); ctx.fillText(LAGEN[S.kaart.laag].bron, W - 8, H - 70); }
+}
+const handle = { x: 0, y: 0 };
+
+/* ------------------------------------------------------------ bewerken */
+function nieuw(modus) { S.modus = modus; if (modus === "binnen") S.b0 = [0, 90, 180, 270].includes(S.b0) ? S.b0 : 0;
+  S.view = { cx: 0, cy: 0, ppm: modus === "buiten" ? 4 : 70 }; sync(modus === "binnen"); toon(); }
+function toon() {
+  $("keuze").hidden = !!S.modus; $("ontwerp").hidden = !S.modus;
+  if (!S.modus) return;
+  const buiten = S.modus === "buiten";
+  $("badge").textContent = buiten ? "Buiten" : "Binnen"; $("badge").className = "badge" + (buiten ? " buiten" : "");
+  $("sec-buiten").hidden = !buiten; $("sec-binnen").hidden = buiten;
+  $("i-lat").value = S.kaart.lat; $("i-lon").value = S.kaart.lon; $("i-b0").value = Math.round(S.b0);
+  $("l-osm").setAttribute("aria-pressed", S.kaart.laag === "osm"); $("l-sat").setAttribute("aria-pressed", S.kaart.laag === "sat");
+  for (const b of document.querySelectorAll("[data-b0]")) b.setAttribute("aria-pressed", +b.dataset.b0 === Math.round(S.b0));
+  $("c-breed").checked = S.breed; $("i-pw").value = S.power;
+  $("hulp").hidden = S.pts.length > 2;
+  resize(); sync(true);
+}
+function sync(fit = false) {
+  P = plan(); simT = Math.min(simT, P.tijd); if (fit) pasFit();
+  $("st-len").innerHTML = P.lengte ? `${nl(P.lengte, 1)}<small> m</small>` : "–";
+  $("st-tijd").innerHTML = P.stappen.length ? (() => { const s = Math.round(P.tijd); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}<small> min</small>`; })() : "–";
+  if (P.bbox && S.pts.length > 1) $("st-ruimte").innerHTML = `${nl(P.bbox.x1 - P.bbox.x0 + 2, 1)}×${nl(P.bbox.y1 - P.bbox.y0 + 2, 1)}<small> m</small>`; else $("st-ruimte").textContent = "–";
+  $("st-draai").textContent = P.stappen.length ? `${P.draaien} · ${P.bogen}` : "–";
+  const msg = $("plan-msg"); msg.className = "melding";
+  if (P.fouten.length) { msg.classList.add("bad"); msg.textContent = P.fouten[0]; }
+  else if (P.bogen) { msg.classList.add("warn"); msg.textContent = "Een boog rijdt het robot nu als korte stukjes van 10° (stap voor stap); vloeiende bogen komen later. Dat duurt langer dan in de simulatie lijkt."; }
+  else msg.textContent = P.stappen.length ? "" : "Nog geen route.";
+  stukken(); commando();
+  $("b-start").disabled = !P.stappen.length || P.fouten.length > 0;
+  $("s-tijd").value = P.tijd ? Math.round(simT / P.tijd * 1000) : 0;
+  tijdLabel(); $("hulp").hidden = S.pts.length > 2;
+  const pw = S.power; $("pw-msg").textContent = `≈ ${nl(pw * K_V, 1)} m/s op vlakke grond`;
+  bewaar(); dirty = true;
+}
+function pasFit() {
+  const q = P.poly.concat(S.pts), b = { x0: Math.min(...q.map((p) => p.x), 0), x1: Math.max(...q.map((p) => p.x), 0), y0: Math.min(...q.map((p) => p.y), 0), y1: Math.max(...q.map((p) => p.y), 0) };
+  const w = Math.max(b.x1 - b.x0, 3) + 2, h = Math.max(b.y1 - b.y0, 3) + 2;
+  S.view.ppm = Math.max(S.modus === "buiten" ? 1.5 : 8, Math.min(S.modus === "buiten" ? 12 : 300, Math.min((W - 80) / w, (H - 150) / h))); S.view.cx = (b.x0 + b.x1) / 2; S.view.cy = (b.y0 + b.y1) / 2;
+}
+function stukken() {
+  const el = $("stukken"); el.innerHTML = ""; const pts = S.pts;
+  $("stukken-leeg").hidden = pts.length > 1;
+  let h = 90 - S.b0;
+  for (let j = 0; j < pts.length - 1; j++) {
+    const dx = pts[j + 1].x - pts[j].x, dy = pts[j + 1].y - pts[j].y, len = Math.hypot(dx, dy), phi = Math.atan2(dy, dx) * DEG;
+    const turn = ang(phi - h), laatste = j === pts.length - 2;
+    const fout = P.fouten.some((f) => f.startsWith(`Stuk ${j + 1} `));
+    const d = document.createElement("div"); d.className = "stuk" + (fout ? " fout" : "");
+    d.innerHTML = `<div class="kop"><i>${j + 1}</i>Stuk ${j + 1}<button aria-label="Punt ${j + 1} weghalen" title="Dit punt en de rest weghalen">×</button></div>
+      <div class="rij"><label>lengte (m)<input type="number" step="0.05" min="0.05" value="${len.toFixed(2)}"></label>
+      <label>draai (° + = links)<input type="number" step="5" value="${turn.toFixed(0)}"></label>
+      <label>${laatste ? "bocht" : "radius bocht (m)"}<input type="number" step="0.1" min="0" value="${laatste ? 0 : (pts[j + 1].r || 0)}" ${laatste ? "disabled" : ""}></label></div>`;
+    const [iL, iT, iR] = d.querySelectorAll("input");
+    iL.onchange = () => { const nw = Math.max(0.05, parseFloat(iL.value.replace(",", "."))); if (!isFinite(nw)) return; snapshot(); const k = nw / (len || 1), ex = dx * k - dx, ey = dy * k - dy;
+      if (len < 1e-6) { pts[j + 1].x = pts[j].x + nw * Math.cos(h * RAD); pts[j + 1].y = pts[j].y + nw * Math.sin(h * RAD); for (let q = j + 2; q < pts.length; q++) { pts[q].x += nw * Math.cos(h * RAD); pts[q].y += nw * Math.sin(h * RAD); } }
+      else for (let q = j + 1; q < pts.length; q++) { pts[q].x += ex; pts[q].y += ey; } sync(); };
+    iT.onchange = () => { const nt = parseFloat(iT.value.replace(",", ".")); if (!isFinite(nt)) return; snapshot(); const dr = (h + nt) - phi, c = Math.cos(dr * RAD), s = Math.sin(dr * RAD);
+      for (let q = j + 1; q < pts.length; q++) { const rx = pts[q].x - pts[j].x, ry = pts[q].y - pts[j].y; pts[q].x = pts[j].x + rx * c - ry * s; pts[q].y = pts[j].y + rx * s + ry * c; } sync(); };
+    iR.onchange = () => { snapshot(); pts[j + 1].r = Math.max(0, parseFloat(iR.value.replace(",", ".")) || 0); sync(); };
+    d.querySelector("button").onclick = () => { snapshot(); S.pts = pts.slice(0, j + 1); sync(); };
+    el.append(d); h = phi;
+  }
+}
+function commando() {
+  const ex = []; for (const s of P.stappen) { if (s[0] === "boog") { ex.push(...boogStappen(s[1], s[2])); } else ex.push(s); }
+  const k = { vooruit: "v", achteruit: "a", links: "l", rechts: "r" };
+  let c = "python -m jaguar.rijden.parcours " + ex.map(([s, w]) => `${k[s]}:${+w.toFixed(3)}`).join(" ") + ` --power ${S.power}`;
+  if (S.modus === "buiten" && S.pts.length > 1) c = "python -m jaguar.rijden.gps_route " + S.pts.map((p) => naarLL(p.x, p.y).map((v) => v.toFixed(7)).join(",")).join(" ") + ` --richting ${Math.round(S.b0)} --power ${S.power}`;
+  $("cmd").textContent = P.stappen.length ? c : "–";
+}
+function boogStappen(r, a, mx = 10) {                // zelfde als jaguar/navigatie/route.py: boog_naar_stappen
+  const n = Math.max(1, Math.ceil(Math.abs(a) / mx)), d = a / n, ak = 2 * r * Math.sin(Math.abs(d) * RAD / 2), kant = a > 0 ? "links" : "rechts", o = [[kant, Math.abs(d) / 2]];
+  for (let i = 0; i < n; i++) { o.push(["vooruit", ak]); o.push([kant, i < n - 1 ? Math.abs(d) : Math.abs(d) / 2]); } return o;
+}
+
+/* muis en aanraking */
+let drag = null;
+const snapOn = (e) => !e.shiftKey;
+function vastklikken(x, y, e) { if (!snapOn(e)) return [x, y]; const st = S.view.ppm > 120 ? 0.05 : S.view.ppm > 40 ? 0.1 : 0.25; return [Math.round(x / st) * st, Math.round(y / st) * st]; }
+function raak(sx, sy) { for (let i = S.pts.length - 1; i >= 1; i--) { const [px, py] = toS(S.pts[i].x, S.pts[i].y); if (Math.hypot(px - sx, py - sy) < 13) return i; } return -1; }
+cv.addEventListener("pointerdown", (e) => {
+  if (e.button === 2) return; try { cv.setPointerCapture(e.pointerId); } catch {}
+  const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (Math.hypot(handle.x - sx, handle.y - sy) < 13) { drag = { k: "richting" }; snapshot(); cv.className = "draai"; return; }
+  const i = raak(sx, sy);
+  if (i > 0) { drag = { k: "punt", i }; snapshot(); return; }
+  drag = { k: "pan", sx, sy, cx: S.view.cx, cy: S.view.cy, bewogen: false };
+});
+cv.addEventListener("pointermove", (e) => {
+  const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (!drag) { cv.className = Math.hypot(handle.x - sx, handle.y - sy) < 13 ? "draai" : raak(sx, sy) > 0 ? "grab" : ""; return; }
+  if (drag.k === "richting") { const [wx, wy] = toW(sx, sy); let b = Math.atan2(wx, wy) * DEG; b = (b + 360) % 360;
+    if (snapOn(e)) { const st = S.modus === "binnen" ? 90 : 5; b = (Math.round(b / st) * st) % 360; } S.b0 = b; $("i-b0").value = Math.round(b); for (const x of document.querySelectorAll("[data-b0]")) x.setAttribute("aria-pressed", +x.dataset.b0 === Math.round(b)); sync(); }
+  else if (drag.k === "punt") { const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e); S.pts[drag.i].x = qx; S.pts[drag.i].y = qy; sync(); }
+  else { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) { drag.bewogen = true; cv.className = "pan"; } if (drag.bewogen) { S.view.cx = drag.cx - (sx - drag.sx) / S.view.ppm; S.view.cy = drag.cy + (sy - drag.sy) / S.view.ppm; dirty = true; bewaar(); } }
+});
+cv.addEventListener("pointerup", (e) => {
+  const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (drag && drag.k === "pan" && !drag.bewogen) {                      // klik zonder slepen = punt toevoegen
+    const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e), last = S.pts[S.pts.length - 1];
+    if (Math.hypot(qx - last.x, qy - last.y) > 0.04) { snapshot(); S.pts.push({ x: qx, y: qy, r: 0 }); sync(); }
+  }
+  drag = null; cv.className = "";
+});
+cv.addEventListener("contextmenu", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), i = raak(e.clientX - r.left, e.clientY - r.top); if (i > 0) { snapshot(); S.pts.splice(i, 1); sync(); } });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top, [wx, wy] = toW(sx, sy);
+  S.view.ppm = Math.max(6, Math.min(600, S.view.ppm * Math.exp(-e.deltaY * 0.0015))); S.view.cx = wx - (sx - W / 2) / S.view.ppm; S.view.cy = wy + (sy - H / 2) / S.view.ppm; dirty = true; bewaar(); }, { passive: false });
+const zoom = (f) => { S.view.ppm = Math.max(6, Math.min(600, S.view.ppm * f)); dirty = true; bewaar(); };
+$("z-in").onclick = () => zoom(1.3); $("z-uit").onclick = () => zoom(1 / 1.3); $("z-fit").onclick = () => { pasFit(); dirty = true; bewaar(); };
+addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.target.closest("input")) { e.preventDefault(); undo(); } });
+
+/* simulatie */
+const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+function tijdLabel() { $("s-t").textContent = `${mmss(simT)} / ${mmss(P.tijd)}`; $("s-stap").textContent = simT > 0 || spelen ? posOp(P, simT).label : "simulatie"; $("s-play").textContent = spelen ? "⏸" : "▶"; }
+function lus(ts) { if (spelen) { const dt = Math.min(0.1, (ts - tPrev) / 1000) * +$("s-snel").value; simT += dt; if (simT >= P.tijd) { simT = P.tijd; spelen = false; }
+    $("s-tijd").value = Math.round(simT / (P.tijd || 1) * 1000); tijdLabel(); dirty = true; }
+  tPrev = ts; if (dirty) { dirty = false; teken(); } requestAnimationFrame(lus); }
+$("s-play").onclick = () => { if (!P.tijd) return; if (!spelen && simT >= P.tijd) simT = 0; spelen = !spelen; tijdLabel(); };
+$("s-reset").onclick = () => { simT = 0; spelen = false; $("s-tijd").value = 0; tijdLabel(); dirty = true; };
+$("s-tijd").oninput = () => { simT = +$("s-tijd").value / 1000 * P.tijd; spelen = false; tijdLabel(); dirty = true; };
+
+/* knoppen en velden */
+$("k-binnen").onclick = () => nieuw("binnen"); $("k-buiten").onclick = () => nieuw("buiten");
+$("k-lijst").onclick = () => parent.postMessage({ type: "lijst" }, "*");
+$("b-terug").onclick = () => { S.modus = null; bewaar(); toon(); };
+$("b-undo").onclick = undo;
+$("b-wis").onclick = () => { snapshot(); S.pts = [{ x: 0, y: 0, r: 0 }]; simT = 0; spelen = false; sync(true); };
+for (const b of document.querySelectorAll("[data-b0]")) b.onclick = () => { snapshot(); S.b0 = +b.dataset.b0; toon(); };
+$("i-b0").onchange = () => { snapshot(); S.b0 = ((parseFloat($("i-b0").value) || 0) % 360 + 360) % 360; toon(); };
+$("i-pw").onchange = () => { S.power = Math.max(50, Math.min(MAX_POWER, Math.round(+$("i-pw").value || 250))); $("i-pw").value = S.power; sync(); };
+$("c-breed").onchange = () => { S.breed = $("c-breed").checked; sync(); };
+for (const [id, laag] of [["l-osm", "osm"], ["l-sat", "sat"]]) $(id).onclick = () => { S.kaart.laag = laag; toon(); };
+$("i-lat").onchange = () => { S.kaart.lat = Math.max(-85, Math.min(85, parseFloat($("i-lat").value) || S.kaart.lat)); sync(true); dirty = true; };
+$("i-lon").onchange = () => { S.kaart.lon = Math.max(-180, Math.min(180, parseFloat($("i-lon").value) || S.kaart.lon)); sync(true); dirty = true; };
+$("b-loc").onclick = () => { if (!navigator.geolocation) return melding("Locatie niet beschikbaar in deze browser.");
+  navigator.geolocation.getCurrentPosition((p) => { S.kaart.lat = p.coords.latitude; S.kaart.lon = p.coords.longitude; toon(); melding(`Locatie ± ${Math.round(p.coords.accuracy)} m`); },
+    () => melding("Locatie niet gelukt (geen toestemming of geen GPS op deze laptop). Vul de coördinaten zelf in."), { timeout: 8000 }); };
+function melding(t) { const s = $("status"); s.textContent = t; clearTimeout(melding.t); melding.t = setTimeout(() => (s.textContent = ""), 6000); }
+$("b-kopieer").onclick = async () => { try { await navigator.clipboard.writeText($("cmd").textContent); melding("gekopieerd"); } catch { melding("kopiëren niet gelukt: selecteer de tekst zelf"); } };
+
+/* bewaarde routes */
+const lijst = () => { try { return JSON.parse(localStorage.getItem(LIJST)) || {}; } catch { return {}; } };
+function vulLijst() { const l = lijst(), s = $("s-lijst"); s.innerHTML = ""; for (const n of Object.keys(l)) s.append(new Option(`${n} (${l[n].modus})`, n)); if (!s.options.length) s.append(new Option("nog niets bewaard", "")); }
+$("b-bewaar").onclick = () => { const n = $("i-naam").value.trim(); if (!n) return melding("geef de route een naam"); const l = lijst();
+  l[n] = { modus: S.modus, pts: S.pts, b0: S.b0, power: S.power, kaart: S.kaart }; try { localStorage.setItem(LIJST, JSON.stringify(l)); melding(`"${n}" bewaard`); } catch { melding("bewaren niet gelukt"); } vulLijst(); };
+$("b-laad").onclick = () => { const n = $("s-lijst").value, o = lijst()[n]; if (!o) return; snapshot(); Object.assign(S, { modus: o.modus, pts: o.pts, b0: o.b0, power: o.power, kaart: o.kaart }); toon(); sync(true); };
+$("b-weg").onclick = () => { const n = $("s-lijst").value, l = lijst(); if (!l[n]) return; delete l[n]; try { localStorage.setItem(LIJST, JSON.stringify(l)); } catch {} vulLijst(); };
+
+/* starten */
+$("b-start").onclick = () => {
+  const b = P.bbox, w = b.x1 - b.x0 + 2, h = b.y1 - b.y0 + 2;
+  $("ds-samen").textContent = `${nl(P.lengte, 1)} m rijden, ${P.draaien} draaien, ${P.bogen} bogen, ongeveer ${mmss(P.tijd)} min, vermogen ${S.power}.`;
+  $("ds-ruimte").textContent = `${nl(w, 1)} × ${nl(h, 1)} m rond de route`; $("ds-ok").checked = false; $("ds-ja").disabled = true; $("ds-fout").textContent = "";
+  $("dlg-start").showModal();
+};
+$("ds-ok").onchange = () => ($("ds-ja").disabled = !$("ds-ok").checked);
+$("ds-nee").onclick = () => $("dlg-start").close();
+$("ds-ja").onclick = async () => {
+  $("ds-ja").disabled = true; $("ds-fout").textContent = "starten…";
+  try {
+    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stappen: P.stappen, power: S.power }) });
+    const a = await r.json(); if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    $("dlg-start").close(); parent.postMessage({ type: "rit-gestart" }, "*"); melding("rit gestart");
+  } catch (e) { $("ds-fout").textContent = e instanceof TypeError ? "Geen verbinding met bediening.py (start: python -m jaguar.rijden.bediening)." : e.message; $("ds-ja").disabled = false; }
+};
+$("dlg-start").addEventListener("click", (e) => { if (e.target === $("dlg-start")) $("dlg-start").close(); });
+
+/* melding bij ontbrekend internet */
+setInterval(() => {
+  const el = $("kaartmelding"); if (S.modus !== "buiten") { el.hidden = true; return; }
+  const geen = tegelFout > 3 && tegelOk === 0;
+  el.hidden = !geen; if (geen) el.textContent = "De kaart laadt niet: deze laptop zit op het robot-wifi zonder internet. Het raster werkt wel; vul het startpunt hierboven in als coördinaten.";
+}, 1500);
+
+
+/* zelftest (?selftest=1): volgt de uitgerolde robotstappen en vergelijkt eindpunt en koers met de getekende route */
+function zelftest() {
+  const res = [];
+  const volg = (stappen, b0) => { let h = 90 - b0, x = 0, y = 0;
+    for (const s of stappen) { const lst = s[0] === "boog" ? boogStappen(s[1], s[2]) : [s];
+      for (const [k, w] of lst) { if (k === "vooruit") { x += w * Math.cos(h * RAD); y += w * Math.sin(h * RAD); } else if (k === "links") h += w; else if (k === "rechts") h -= w; } }
+    return { x, y, h: ang(h) }; };
+  const cases = {
+    "vierkant": [[0, 0, 0], [0, 4, 0], [4, 4, 0], [4, 0, 0], [0, 0, 0]],
+    "bogen": [[0, 0, 0], [0, 3, 0.8], [3, 3, 0.6], [3, 0.5, 0], [5.5, 0.5, 0]],
+    "s-bocht": [[0, 0, 0], [0, 3, 1], [2, 5, 1.5], [5, 5, 0]],
+    "scherpe hoek": [[0, 0, 0], [3, 1, 0.5], [0, 2.5, 0]],
+  };
+  for (const b0 of [0, 90, 215]) for (const [naam, c] of Object.entries(cases)) {
+    const pts = c.map(([x, y, r]) => ({ x, y, r })), p = plan(pts, b0, 250);
+    const e = volg(p.stappen, b0), last = pts[pts.length - 1];
+    const fout = Math.hypot(e.x - last.x, e.y - last.y);
+    const hLast = Math.atan2(last.y - pts[pts.length - 2].y, last.x - pts[pts.length - 2].x) * DEG;
+    const dh = Math.abs(ang(e.h - hLast));
+    res.push(`${fout < 0.02 && dh < 0.6 && !p.fouten.length ? "PASS" : "FAIL"} ${naam} b0=${b0}: eind-fout ${fout.toFixed(3)} m, koersfout ${dh.toFixed(2)}°, ${p.stappen.length} stappen`);
+  }
+  const kort = plan([{ x: 0, y: 0, r: 0 }, { x: 0, y: 1, r: 2 }, { x: 3, y: 1, r: 0 }], 0, 250);
+  res.push(`${kort.fouten.length ? "PASS" : "FAIL"} te korte stukken worden gemeld`);
+  res.push(`${plan([{ x: 0, y: 0, r: 0 }], 0, 250).stappen.length === 0 ? "PASS" : "FAIL"} lege route`);
+  document.title = res.every((r) => r.startsWith("PASS")) ? "ZELFTEST OK" : "ZELFTEST FOUT";
+  const pre = document.createElement("pre"); pre.id = "zelftest"; pre.textContent = res.join(String.fromCharCode(10)); document.body.append(pre);
+}
+if (new URLSearchParams(location.search).get("selftest") === "1") zelftest();
+
+/* interactietest (?selftest=2): gesimuleerde muis op het tekenvlak */
+function interactietest() {
+  const res = [];
+  S = fresh(); S.modus = "binnen"; toon(); resize();
+  const r = cv.getBoundingClientRect();
+  const ev = (type, x, y, extra = {}) => cv.dispatchEvent(new PointerEvent(type, Object.assign({ clientX: r.left + x, clientY: r.top + y, button: 0, pointerId: 1, bubbles: true }, extra)));
+  const klik = (wx, wy) => { const [sx, sy] = toS(wx, wy); ev("pointerdown", sx, sy); ev("pointerup", sx, sy); };
+  const ok = (c, t) => res.push(`${c ? "PASS" : "FAIL"} ${t}`);
+  S.view = { cx: 1.5, cy: 1.5, ppm: 80 };
+  klik(0, 2); klik(2, 2); klik(2, 0.5);
+  ok(S.pts.length === 4, `3 klikken = 3 punten (${S.pts.length - 1})`);
+  ok(Math.abs(S.pts[1].y - 2) < 0.01 && Math.abs(S.pts[2].x - 2) < 0.01, "punten staan op de aangeklikte plek");
+  ok(P.stappen.map((x) => x[0]).join() === "vooruit,rechts,vooruit,rechts,vooruit", "route: " + P.stappen.map((x) => x[0]).join());
+  // punt slepen
+  const [a, b] = toS(2, 2), [c, d] = toS(2.5, 2.5); ev("pointerdown", a, b); ev("pointermove", c, d); ev("pointerup", c, d);
+  ok(Math.abs(S.pts[2].x - 2.5) < 0.06 && Math.abs(S.pts[2].y - 2.5) < 0.06, `punt verplaatst naar (${S.pts[2].x.toFixed(2)}, ${S.pts[2].y.toFixed(2)})`);
+  // vlak slepen verschuift het beeld en voegt geen punt toe
+  const n = S.pts.length, cx0 = S.view.cx; ev("pointerdown", 100, 100); ev("pointermove", 160, 100); ev("pointerup", 160, 100);
+  ok(S.pts.length === n && S.view.cx < cx0 - 0.1, "slepen op het vlak schuift het beeld");
+  // ongedaan
+  undo(); ok(Math.abs(S.pts[2].x - 2) < 0.06, "ongedaan maken zet het punt terug");
+  // weghalen met rechtermuisknop
+  const [e1, e2] = toS(S.pts[3].x, S.pts[3].y); cv.dispatchEvent(new MouseEvent("contextmenu", { clientX: r.left + e1, clientY: r.top + e2, bubbles: true, cancelable: true }));
+  ok(S.pts.length === 3, "rechtermuisknop haalt een punt weg");
+  // richting draaien met het oranje handvat: naar rechts = kompaskoers 90
+  teken(); const [hx, hy] = [handle.x, handle.y], [s0x, s0y] = toS(0, 0);
+  ev("pointerdown", hx, hy); ev("pointermove", s0x + 120, s0y); ev("pointerup", s0x + 120, s0y);
+  ok(Math.round(S.b0) === 90, `richting naar rechts = ${Math.round(S.b0)}°`);
+  ok(P.stappen[0][0] === "vooruit" || P.stappen[0][0] === "links" || P.stappen[0][0] === "rechts", "plan is opnieuw berekend");
+  document.title = res.every((q) => q.startsWith("PASS")) ? "INTERACTIE OK" : "INTERACTIE FOUT";
+  const pre = document.createElement("pre"); pre.id = "zelftest"; pre.textContent = res.join(String.fromCharCode(10)); document.body.append(pre);
+}
+if (new URLSearchParams(location.search).get("selftest") === "2") interactietest();
+
+vulLijst();
+// demo/test: ?demo=binnen of ?demo=buiten laadt een voorbeeldroute
+const demo = new URLSearchParams(location.search).get("demo");
+if (demo) {
+  S = fresh(); S.modus = demo === "buiten" ? "buiten" : "binnen"; S.view.ppm = 70;
+  S.pts = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 3, r: 0.8 }, { x: 3, y: 3, r: 0.6 }, { x: 3, y: 0.5, r: 0 }, { x: 5.5, y: 0.5, r: 0 }];
+}
+toon();
+if (demo) { const t = parseFloat(new URLSearchParams(location.search).get("t")); if (t > 0) { simT = Math.min(t, P.tijd); tijdLabel(); $("s-tijd").value = Math.round(simT / P.tijd * 1000); } }
+requestAnimationFrame(lus);
+</script>
+</body>
+</html>

@@ -156,6 +156,10 @@ Totale afstand telt alle bewegingen op, ook de kleine kruipstoten heen en weer b
 
 CSV bevat tijd, fase, motoropdracht en ruwe sensorregel. Zonder CSV kan achteraf geen nieuw dashboard worden berekend. Analyse vereist IMU, rustfase en encoders van beide motordrivers.
 
+## Een parcours tekenen
+
+`python -m jaguar.rijden.bediening` opent de live pagina; de knop **Rijden** opent een ontwerper: kies Binnen (raster in meters) of Buiten (kaart), teken de route met punten en bogen, kijk naar de simulatie en start. Zie [jaguar/live/](jaguar/live/README.md).
+
 ## GPS-route
 
 ```powershell
