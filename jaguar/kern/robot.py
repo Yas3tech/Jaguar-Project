@@ -23,8 +23,8 @@ import socket
 import threading
 import time
 
-from jaguar.analyse import M_PER_CNT, WHEEL_R, WHEEL_DIS, GYRO_LSB_DPS, ACC_LSB_G
-from jaguar.odometrie import Odometrie
+from jaguar.analyse.rit import M_PER_CNT, WHEEL_R, WHEEL_DIS, GYRO_LSB_DPS, ACC_LSB_G
+from jaguar.kern.odometrie import Odometrie
 
 ROBOT_IP = "192.168.0.60"
 ROBOT_PORT = 10001
@@ -201,14 +201,6 @@ class Jaguar:
         self._clock += steps / IMU_HZ
         self._imu_since_enc = True
         self.odo.imu(self._clock, steps / IMU_HZ, gyro, acc)
-
-    def melding(self, text):
-        """Bericht voor de terminal, de CSV en de live pagina."""
-        print(text)
-        self.note(f"MELDING {self.phase} {text}")
-        view = getattr(self.live, "view", self.live)     # MqttStream heeft de LiveView in .view
-        if view is not None and hasattr(view, "status"):
-            view.status["melding"] = text
 
     # Koers en zijdelingse afwijking komen uit de odometrie.
     heading = property(lambda self: self.odo.koers)
@@ -531,7 +523,7 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
     try:
         writer = None
         if record:
-            directory = Path(__file__).resolve().parent.parent / "ritten"
+            directory = Path(__file__).resolve().parents[2] / "ritten"
             directory.mkdir(exist_ok=True)
             path = directory / f"rit_{datetime.now():%Y%m%d_%H%M%S_%f}{suffix}.csv"
         name = path.stem if path else f"rit_{datetime.now():%Y%m%d_%H%M%S}_zonder_csv"

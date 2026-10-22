@@ -1,8 +1,8 @@
 """Nep-robot om zonder Jaguar te testen: speelt een opgenomen rit-CSV af via TCP.
 
 Gebruik (twee terminals):
-  python -m jaguar.nep_robot                                   # standaard testdata/demo_rit.csv
-  python -m jaguar.rechtdoor --ip 127.0.0.1 --mqtt --no-csv
+  python -m jaguar.testen.nep_robot                                   # standaard testdata/demo_rit.csv
+  python -m jaguar.rijden.rechtdoor --ip 127.0.0.1 --mqtt --no-csv
 
 De nep-robot luistert op 127.0.0.1:10001, net als de echte op 192.168.0.60:10001, en stuurt
 elke ontvangen regel uit de CSV opnieuw door in het oorspronkelijke tempo. Hij negeert
@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parents[2]
 
 
 def serve(conn, rows):

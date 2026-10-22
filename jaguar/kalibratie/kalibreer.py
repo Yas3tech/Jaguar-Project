@@ -1,10 +1,10 @@
 """Wielstraal kalibreren met een rolmeter, of de afstandsmethodes vergelijken met de rolmeter.
 
-1. Rij een rechte afstand op de mat:  python -m jaguar.rechtdoor --power 250 --distance 3
+1. Rij een rechte afstand op de mat:  python -m jaguar.rijden.rechtdoor --power 250 --distance 3
 2. Meet met de rolmeter hoe ver hetzelfde punt van de robot (bv. de voorbumper) echt verplaatst is.
-3. python -m jaguar.kalibreer 2.968            (gemeten meter; standaard de nieuwste rit)
-   python -m jaguar.kalibreer 2.968 ritten/rit_....csv --fase heen
-   python -m jaguar.kalibreer 6.41 --vergelijk  (op gras/grind: alleen vergelijken, niets opslaan)
+3. python -m jaguar.kalibratie.kalibreer 2.968            (gemeten meter; standaard de nieuwste rit)
+   python -m jaguar.kalibratie.kalibreer 2.968 ritten/rit_....csv --fase heen
+   python -m jaguar.kalibratie.kalibreer 6.41 --vergelijk  (op gras/grind: alleen vergelijken, niets opslaan)
 
 De encoders tellen wielomwentelingen; de effectieve rolstraal van de noppenbanden op de
 ondergrond wijkt af van de nominale 0,135 m. Nieuwe straal = gebruikte straal × echt / encoder,
@@ -17,9 +17,9 @@ import csv
 import json
 from pathlib import Path
 
-from jaguar.analyse import CALIBRATION, KALIBRATIE, WHEEL_R, analyse
+from jaguar.analyse.rit import CALIBRATION, KALIBRATIE, WHEEL_R, analyse
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parents[2]
 
 
 def main():

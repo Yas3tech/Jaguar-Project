@@ -1,19 +1,19 @@
 """Proeven voor een exacte afstand op elke ondergrond (zie README, "Afstand op elke ondergrond").
 
 1. Robot OP BLOKKEN (wielen vrij van de grond):
-     python -m jaguar.test_sondewiel adres
+     python -m jaguar.kalibratie.test_sondewiel adres
    Kunnen voor- (MM0) en achterdriver (MM1) apart rijden? Lopen de wielen vrij uit bij vermogen 0,
    of remt de driver ze af? Alleen als beide "ja / vrij" zijn, kunnen de achterwielen als meetwiel dienen.
 
 2. Op de grond (eerst de mat, dan gras/grind), met de rolmeter erbij:
-     python -m jaguar.test_sondewiel rijden --distance 3
+     python -m jaguar.kalibratie.test_sondewiel rijden --distance 3
    Alleen de voorwielen trekken; de achterwielen krijgen geen vermogen en rollen mee met de grond.
    Ze slippen dus niet door aandrijving en meten de echte afstand. Het script stopt op de afstand
    van de achterwielen en toont hoeveel de voorwielen slipten. Meet daarna met de rolmeter:
-     python -m jaguar.kalibreer <gemeten> --vergelijk
+     python -m jaguar.kalibratie.kalibreer <gemeten> --vergelijk
 
 3. Op de grond, met een rechte lijn (tape) langs de robot:
-     python -m jaguar.test_sondewiel draai --turns 2
+     python -m jaguar.kalibratie.test_sondewiel draai --turns 2
    Draait ter plaatse tot de gyro 720° telt. Geef daarna de echte hoek in (bv. 712); de gyroschaal
    komt in config/kalibratie.json en geldt voor de rijscripts en de analyse.
 """
@@ -21,8 +21,8 @@ import argparse
 import json
 import time
 
-from jaguar.analyse import CALIBRATION, KALIBRATIE, M_PER_CNT
-from jaguar.robot import TICK, positive_seconds, prepare, robot_session
+from jaguar.analyse.rit import CALIBRATION, KALIBRATIE, M_PER_CNT
+from jaguar.kern.robot import TICK, positive_seconds, prepare, robot_session
 
 ROLL_FREE_M = 0.03        # na vermogen 0 nog zoveel uitlopen (op blokken) = de driver remt niet
 
@@ -83,7 +83,7 @@ def adres(robot, args):
     print("Uitloop achterwielen:", "vrij (driver remt niet)" if vrij else
           "kort: de driver remt bij vermogen 0, of de overbrenging heeft veel wrijving. Proef 2 op de mat toont of ze meerollen.")
     if apart:
-        print("Volgende stap: python -m jaguar.test_sondewiel rijden --distance 3 (eerst op de mat).")
+        print("Volgende stap: python -m jaguar.kalibratie.test_sondewiel rijden --distance 3 (eerst op de mat).")
 
 
 def rijden(robot, args):
@@ -101,7 +101,7 @@ def rijden(robot, args):
         print("De achterwielen rolden niet mee (remmen of slepen): als meetwiel onbruikbaar.")
     elif abs(front) > 0:
         print(f"Slip van de voorwielen: {(front - rear) / front * 100:+.1f} % (achterwielen = grond, als ze vrij rollen).")
-    print("Meet nu met de rolmeter en vergelijk: python -m jaguar.kalibreer <gemeten_m> --vergelijk")
+    print("Meet nu met de rolmeter en vergelijk: python -m jaguar.kalibratie.kalibreer <gemeten_m> --vergelijk")
 
 
 def draai(robot, args):

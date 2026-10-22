@@ -1,18 +1,18 @@
 """Parcours rijden: een reeks stappen vooruit, achteruit en ter plaatse draaien.
 
-  python -m jaguar.parcours vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
-  python -m jaguar.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2          (vierkant)
+  python -m jaguar.rijden.parcours vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
+  python -m jaguar.rijden.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2          (vierkant)
 
 Stappen: vooruit:<m>, achteruit:<m>, links:<graden>, rechts:<graden> (afgekort v, a, l, r).
 Rijden gebruikt de slipbewuste odometrie (zoals robot.py), draaien de gyro.
 Na een draai volgt de robot de nieuwe koers; opeenvolgende rechte stukken blijven op dezelfde lijn.
-Daarna: python -m jaguar.analyse, en het dashboard toont de geplande en de gereden route.
-Draaien is zo juist als de gyroschaal: kalibreer eerst met  python -m jaguar.test_sondewiel draai.
+Daarna: python -m jaguar.analyse.rit, en het dashboard toont de geplande en de gereden route.
+Draaien is zo juist als de gyroschaal: kalibreer eerst met  python -m jaguar.kalibratie.test_sondewiel draai.
 """
 import argparse
 import math
 
-from jaguar.robot import add_drive_args, positive_seconds, prepare, robot_session
+from jaguar.kern.robot import add_drive_args, positive_seconds, prepare, robot_session
 
 EINDKOERS_TOL = 3.0   # graden: grotere koersfout na de laatste stap wordt ter plaatse rechtgezet
 MAX_CORRECTIE = 0.5   # m: grotere correctie voor de vorige stappen vertrouwen we niet (bv. haperende odometrie)

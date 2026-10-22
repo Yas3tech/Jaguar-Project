@@ -1,7 +1,7 @@
 """Robot besturen vanaf de live pagina: parcours samenstellen, starten en stoppen in de browser.
 
-  python -m jaguar.bediening                   echte robot (192.168.0.60)
-  python -m jaguar.bediening --ip 127.0.0.1    nep_robot.py
+  python -m jaguar.rijden.bediening                   echte robot (192.168.0.60)
+  python -m jaguar.rijden.bediening --ip 127.0.0.1    nep_robot.py
 
 Opent http://127.0.0.1:8765/ met de knop Rijden. Elke rit is een parcours zoals parcours.py
 (vooruit, achteruit, links, rechts) en krijgt zijn eigen CSV in ritten/, dus de knop Analyse werkt zoals altijd.
@@ -13,8 +13,8 @@ import sys
 import threading
 
 from jaguar.live import view as live_view
-from jaguar.robot import ROBOT_IP, ROBOT_PORT, Aborted, prepare, robot_session
-from jaguar.parcours import STAPPEN, rijd
+from jaguar.kern.robot import ROBOT_IP, ROBOT_PORT, Aborted, prepare, robot_session
+from jaguar.rijden.parcours import STAPPEN, rijd
 
 MAX_STAPPEN = 30
 MAX_METER = 20.0      # per stap; langer is eerder een tikfout

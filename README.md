@@ -4,42 +4,39 @@ Robot Dr Robot Jaguar 4x4: rijden met slipbewuste odometrie, live meekijken, rit
 
 ## Mappen
 
+Elke map heeft zijn eigen README met uitleg.
+
 ```
 Jaguar-Project/
-├─ jaguar/              alle Python-code (starten met  python -m jaguar.<naam>)
-│  ├─ robot.py          verbinding met de robot, motoren, rijden en draaien (kern)
-│  ├─ odometrie.py      afstand, koers en slip uit encoders, gyro en accelerometer
-│  ├─ analyse.py        rit achteraf analyseren en het dashboard bijwerken
-│  ├─ rechtdoor.py      rijscript: rechtdoor
-│  ├─ heen_en_terug.py  rijscript: heen en terug
-│  ├─ parcours.py       rijscript: parcours van stappen (vooruit, achteruit, links, rechts)
-│  ├─ bediening.py      rijden vanuit de browser (knop Rijden, STOP)
-│  ├─ kalibreer.py      wielstraal kalibreren met een rolmeter
-│  ├─ test_sondewiel.py proeven met vrijlopende meetwielen en gyroschaal
-│  ├─ nep_robot.py      simulator: speelt testdata/demo_rit.csv af
-│  └─ live/             live pagina: view.py (server), pagina.html, opties.json, mqtt_stream.py
+├─ jaguar/              alle Python-code (starten met  python -m jaguar.<map>.<bestand>)
+│  ├─ kern/             robot.py (verbinding, motoren) en odometrie.py (afstand, koers, slip)
+│  ├─ rijden/           rechtdoor, heen_en_terug, parcours en bediening (rijden vanuit de browser)
+│  ├─ analyse/          rit.py: een rit achteraf analyseren en het dashboard maken
+│  ├─ kalibratie/       kalibreer.py en test_sondewiel.py: wielstraal en gyroschaal meten
+│  ├─ live/             de live webpagina (view.py, pagina.html, opties.json, mqtt_stream.py)
+│  └─ testen/           nep_robot.py: de nep-robot
 ├─ ritten/              CSV's en analyses van alle ritten
 ├─ dashboard/           dashboard.html (resultaat) en template.html (bron)
 ├─ config/              kalibratie.json (gemeten wielstraal)
 ├─ grafana/             Grafana, InfluxDB en MQTT (docker compose)
-├─ testdata/            demo_rit.csv voor de simulator
+├─ testdata/            demo_rit.csv voor de nep-robot
 ├─ docs/robot/          handleidingen en netwerkgegevens van de robot
-└─ camera/              camera en obstakeldetectie, bewust los van de rest (zie camera/README.md)
+└─ camera/              camera en obstakeldetectie, bewust los van de rest
 ```
 
-Alle commando's draai je vanuit de projectmap, bijvoorbeeld `python -m jaguar.rechtdoor --power 250 --distance 2`.
+Alle commando's draai je vanuit de projectmap, bijvoorbeeld `python -m jaguar.rijden.rechtdoor --power 250 --distance 2`.
 
 ## Rijden en opslaan
 
 Beide scripts slaan standaard een CSV op in `ritten`. Gebruik `--no-csv` om dit uit te schakelen; `--csv` om het expliciet aan te zetten.
 
 ```powershell
-python -m jaguar.rechtdoor --power 250 --distance 2.0
-python -m jaguar.heen_en_terug --power 250 --distance 1.5 --pause 1.5
-python -m jaguar.heen_en_terug --power 150 --duration 2 --ramp 2      # oude manier: op tijd
-python -m jaguar.rechtdoor --power 150 --distance 1 --no-csv
-python -m jaguar.analyse
-python -m jaguar.analyse ritten/rit_20261002_100122.csv
+python -m jaguar.rijden.rechtdoor --power 250 --distance 2.0
+python -m jaguar.rijden.heen_en_terug --power 250 --distance 1.5 --pause 1.5
+python -m jaguar.rijden.heen_en_terug --power 150 --duration 2 --ramp 2      # oude manier: op tijd
+python -m jaguar.rijden.rechtdoor --power 150 --distance 1 --no-csv
+python -m jaguar.analyse.rit
+python -m jaguar.analyse.rit ritten/rit_20261002_100122.csv
 ```
 
 `--distance` (standaard) is de afstand in meter volgens de slipbewuste odometrie (zie hieronder), voor heen/terug **per richting**. De robot bouwt het vermogen op over `--ramp` seconden (standaard 1,5), remt af naarmate het doel nadert, stopt 2 cm ervoor en legt de laatste millimeters af met korte kruipstoten (`--creep`, standaard 60). Na elke stoot meet hij in stilstand opnieuw, tot de fout binnen `--tolerance` mm ligt (standaard 3). Na elk segment toont het script het doel, de meting en de fout.
@@ -49,11 +46,11 @@ Grenzen van die precisie: één encoderpuls is 2,8 mm wielomtrek, en de encoders
 Een parcours met meerdere stappen en draaien ter plaatse:
 
 ```powershell
-python -m jaguar.parcours vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
-python -m jaguar.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2      # vierkant
+python -m jaguar.rijden.parcours vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
+python -m jaguar.rijden.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2      # vierkant
 ```
 
-Rechte stappen rijden zoals hierboven. Draaien gebeurt ter plaatse op de gyro: het vermogensverschil zakt met de resterende hoek, de robot stopt vroeger volgens zijn draaisnelheid (uitloop) en corrigeert met korte stoten tot op 1°. Komt hij niet in beweging, dan verhoogt hij het minimumvermogen stap voor stap. Rechte stappen rijden naar het geplande hoekpunt (gerekend vanaf de start) en volgen de geplande lijn. Een afwijking van de vorige stap (te ver, te kort, naast de lijn) werkt de volgende stap dus vanzelf weg, tot 50 cm per stap; een grotere correctie vertrouwt het script niet. Na de laatste stap zet het de koers recht als die meer dan 3° afwijkt. Dat corrigeert alles wat de odometrie meet; wat ze niet ziet (gyroschaal, wielstraal op een andere ondergrond) blijft staan. Draaien is zo juist als de gyroschaal: kalibreer eerst met `python -m jaguar.test_sondewiel draai`. Het dashboard toont de geplande route en de gereden route op ware schaal.
+Rechte stappen rijden zoals hierboven. Draaien gebeurt ter plaatse op de gyro: het vermogensverschil zakt met de resterende hoek, de robot stopt vroeger volgens zijn draaisnelheid (uitloop) en corrigeert met korte stoten tot op 1°. Komt hij niet in beweging, dan verhoogt hij het minimumvermogen stap voor stap. Rechte stappen rijden naar het geplande hoekpunt (gerekend vanaf de start) en volgen de geplande lijn. Een afwijking van de vorige stap (te ver, te kort, naast de lijn) werkt de volgende stap dus vanzelf weg, tot 50 cm per stap; een grotere correctie vertrouwt het script niet. Na de laatste stap zet het de koers recht als die meer dan 3° afwijkt. Dat corrigeert alles wat de odometrie meet; wat ze niet ziet (gyroschaal, wielstraal op een andere ondergrond) blijft staan. Draaien is zo juist als de gyroschaal: kalibreer eerst met `python -m jaguar.kalibratie.test_sondewiel draai`. Het dashboard toont de geplande route en de gereden route op ware schaal.
 
 Richting: `--distance -3` of `--power -250` rijdt achteruit. Bij heen/terug betekent een negatief vermogen of een negatieve afstand: eerst achteruit, dan terug vooruit.
 
@@ -71,16 +68,16 @@ Het verschil is begrensd op 30 % van het rijvermogen (60 % bij de kruipstoten). 
 De encoders rekenen met een nominale wielstraal van 0,135 m. De echte rolstraal van de noppenbanden hangt af van de ondergrond en de bandenspanning. Kalibreren gaat zo:
 
 ```powershell
-python -m jaguar.rechtdoor --power 250 --distance 3
+python -m jaguar.rijden.rechtdoor --power 250 --distance 3
 # meet met de rolmeter hoe ver één vast punt van de robot verplaatst is, bv. 2,968 m
-python -m jaguar.kalibreer 2.968
+python -m jaguar.kalibratie.kalibreer 2.968
 ```
 
-Dit schrijft `config/kalibratie.json`. De rijscripts en de analyse gebruiken daarna die straal. Verwijder het bestand om terug te gaan naar 0,135 m. Kalibreer op een harde, vlakke ondergrond: op gras zou de straal de slip mee opnemen. `python -m jaguar.kalibreer 6.41 --vergelijk` slaat niets op en toont per methode (rijscript, gemiddelde 4 wielen, slipbewust, voor- en achterwielen) de fout t.o.v. de rolmeter.
+Dit schrijft `config/kalibratie.json`. De rijscripts en de analyse gebruiken daarna die straal. Verwijder het bestand om terug te gaan naar 0,135 m. Kalibreer op een harde, vlakke ondergrond: op gras zou de straal de slip mee opnemen. `python -m jaguar.kalibratie.kalibreer 6.41 --vergelijk` slaat niets op en toont per methode (rijscript, gemiddelde 4 wielen, slipbewust, voor- en achterwielen) de fout t.o.v. de rolmeter.
 
 ## Afstand op elke ondergrond
 
-`jaguar/odometrie.py` berekent de afgelegde weg uit de vier wielencoders, getoetst aan de gyro en de accelerometer. Dezelfde code draait live in de rijscripts en achteraf in `jaguar/analyse.py`. Op een schone ondergrond is het resultaat gelijk aan het gemiddelde van de vier wielen; het verschil verschijnt pas als er iets slipt.
+`jaguar/kern/odometrie.py` berekent de afgelegde weg uit de vier wielencoders, getoetst aan de gyro en de accelerometer. Dezelfde code draait live in de rijscripts en achteraf in `jaguar/analyse/rit.py`. Op een schone ondergrond is het resultaat gelijk aan het gemiddelde van de vier wielen; het verschil verschijnt pas als er iets slipt.
 
 Wat de ritten van 2 en 8 oktober lieten zien (en waarop de drempels gebaseerd zijn):
 
@@ -103,10 +100,10 @@ Het dashboard toont de slipbewuste afstand met een onzekerheid, het gemiddelde v
 **Grens:** slippen alle vier de wielen evenveel aan constante snelheid (gras, zand), dan ziet niemand het: de wielen zijn het eens en de accelerometer meet geen versnelling. In de simulator gaf 15 % slip over 1,5 m 26 cm te veel. Daarvoor dient de proef met vrijlopende meetwielen:
 
 ```powershell
-python -m jaguar.test_sondewiel adres                 # robot OP BLOKKEN: rijden MM0 en MM1 apart? lopen de wielen vrij uit?
-python -m jaguar.test_sondewiel rijden --distance 3   # alleen de voorwielen trekken, de achterwielen meten de grond
-python -m jaguar.kalibreer 2.97 --vergelijk           # rolmeter: welke methode zat het dichtst?
-python -m jaguar.test_sondewiel draai --turns 2       # gyroschaal: draai ter plaatse, geef de echte hoek in
+python -m jaguar.kalibratie.test_sondewiel adres                 # robot OP BLOKKEN: rijden MM0 en MM1 apart? lopen de wielen vrij uit?
+python -m jaguar.kalibratie.test_sondewiel rijden --distance 3   # alleen de voorwielen trekken, de achterwielen meten de grond
+python -m jaguar.kalibratie.kalibreer 2.97 --vergelijk           # rolmeter: welke methode zat het dichtst?
+python -m jaguar.kalibratie.test_sondewiel draai --turns 2       # gyroschaal: draai ter plaatse, geef de echte hoek in
 ```
 
 Wielen zonder vermogen hebben geen aandrijfslip en rollen mee met de grond, als de driver ze bij vermogen 0 niet afremt. `adres` controleert dat eerst. De Dr Robot-software stuurt alleen `MMW` (beide drivers); dat `MM0 !M` en `MM1 !M` apart werken, is nog niet op de robot getest. De draaiproef is nodig omdat de gyroschaal uit de datasheet komt: bij het kantelen in rit `134323` telde de gyro 81° tegen 85° volgens de accelerometer.
@@ -114,15 +111,15 @@ Wielen zonder vermogen hebben geen aandrijfslip en rollen mee met de grond, als 
 ## Live meekijken tijdens het rijden
 
 - **Browser (standaard aan):** elk rijscript opent `http://127.0.0.1:8765/` met live tegels en grafieken (`jaguar/live/view.py`, `jaguar/live/pagina.html`). Uitschakelen met `--no-live`.
-  Na de rit blijft het script de pagina openhouden tot je in de terminal op Enter drukt. De knop **Analyse** draait dan `jaguar/analyse.py` op de CSV van deze rit en toont het dashboard in een venster boven de live pagina. **Dashboard openen** toont het opnieuw.
+  Na de rit blijft het script de pagina openhouden tot je in de terminal op Enter drukt. De knop **Analyse** draait dan `jaguar/analyse/rit.py` op de CSV van deze rit en toont het dashboard in een venster boven de live pagina. **Dashboard openen** toont het opnieuw.
   De knop **Opties** opent een venster op dezelfde pagina: grafieken verbergen, en of de analyse vanzelf start. `http://127.0.0.1:8765/options` opent de pagina met dat venster al open. De keuzes staan in `jaguar/live/opties.json` en gelden ook voor de volgende ritten.
-- **Rijden vanuit de browser:** `python -m jaguar.bediening` (met `--ip 127.0.0.1` voor `jaguar/nep_robot.py`) houdt de live pagina open en toont de knop **Rijden**. Daar stel je een parcours samen zoals bij `jaguar/parcours.py` (+ Vooruit, + Achteruit, + Links, + Rechts, zoveel stappen als je wilt) en kies je het vermogen (50–600). **Start rit** rijdt het parcours met een eigen CSV, dus **Analyse** werkt daarna zoals altijd. Tijdens de rit zet de rode knop **STOP** of de spatiebalk de motoren op 0 en de E-Stop weer aan. Starten kan alleen op de laptop zelf; andere apparaten op de wifi kunnen meekijken en STOP drukken. De fysieke noodstop blijft de echte noodstop. `python -m jaguar.live.view` doet hetzelfde. Enter in de terminal sluit af en stopt eerst een lopende rit.
+- **Rijden vanuit de browser:** `python -m jaguar.rijden.bediening` (met `--ip 127.0.0.1` voor `jaguar/testen/nep_robot.py`) houdt de live pagina open en toont de knop **Rijden**. Daar stel je een parcours samen zoals bij `jaguar/rijden/parcours.py` (+ Vooruit, + Achteruit, + Links, + Rechts, zoveel stappen als je wilt) en kies je het vermogen (50–600). **Start rit** rijdt het parcours met een eigen CSV, dus **Analyse** werkt daarna zoals altijd. Tijdens de rit zet de rode knop **STOP** of de spatiebalk de motoren op 0 en de E-Stop weer aan. Starten kan alleen op de laptop zelf; andere apparaten op de wifi kunnen meekijken en STOP drukken. De fysieke noodstop blijft de echte noodstop. `python -m jaguar.live.view` doet hetzelfde. Enter in de terminal sluit af en stopt eerst een lopende rit.
 - **Grafana (`--mqtt`):** dezelfde live waarden gaan via MQTT naar InfluxDB, en het dashboard **Jaguar live** op http://localhost:3000 toont ze. De indeling volgt dit analysedashboard: kerncijfers, Ritverkenner, Pad in 3D (hoogte en gebeurtenissen), Tracking, Niveau en Trillingen. Opzetten: zie [grafana/README.md](grafana/README.md).
-- **Zonder robot testen:** `python -m jaguar.nep_robot` speelt `testdata/demo_rit.csv` af. Rijd ertegen met `--ip 127.0.0.1 --duration 5 --no-csv`. Rijden op afstand werkt niet met de nep-robot, omdat die een vaste opname afspeelt.
+- **Zonder robot testen:** `python -m jaguar.testen.nep_robot` speelt `testdata/demo_rit.csv` af. Rijd ertegen met `--ip 127.0.0.1 --duration 5 --no-csv`. Rijden op afstand werkt niet met de nep-robot, omdat die een vaste opname afspeelt.
 
 ```powershell
 cd grafana; docker compose up -d; cd ..
-python -m jaguar.rechtdoor --power 150 --distance 1 --mqtt --no-live
+python -m jaguar.rijden.rechtdoor --power 150 --distance 1 --mqtt --no-live
 ```
 
 **Meekijken via het netwerk.** Iedereen op dezelfde wifi (DriJaguar) kan meekijken; alleen de laptop die rijdt heeft de code nodig:
@@ -133,14 +130,14 @@ python -m jaguar.rechtdoor --power 150 --distance 1 --mqtt --no-live
 | Grafana | `http://<IP-Grafana-laptop>:3000/` | `--mqtt`, en `--mqtt-host <IP>` als Docker/Grafana op een andere laptop draait |
 
 Voorbeeld: Grafana draait op jouw laptop (192.168.0.104), je vriend rijdt met zijn laptop:
-`python -m jaguar.rechtdoor --distance 1 --mqtt --mqtt-host 192.168.0.104`. Iedereen opent dan http://192.168.0.104:3000/.
+`python -m jaguar.rijden.rechtdoor --distance 1 --mqtt --mqtt-host 192.168.0.104`. Iedereen opent dan http://192.168.0.104:3000/.
 Windows vraagt de eerste keer om Python/Docker door de firewall te laten: kies **Privénetwerk** en sta toe.
 
-De live waarden zijn een benadering. Dit dashboard (`jaguar/analyse.py` op de CSV) blijft de definitieve meting. De CSV verandert niet door de live weergave.
+De live waarden zijn een benadering. Dit dashboard (`jaguar/analyse/rit.py` op de CSV) blijft de definitieve meting. De CSV verandert niet door de live weergave.
 
 ## Dashboard
 
-Open `dashboard/dashboard.html` in de projectmap en kies een rit met **Kies een rit**. Elke uitvoering van `python -m jaguar.analyse` werkt ditzelfde dashboard bij met alle `rit_*_analyse.json`-bestanden; de zojuist geanalyseerde rit is standaard geselecteerd. Ververs de browser na een nieuwe analyse. Het dashboard opent rechtstreeks in de browser, zonder server; voor de 3D-beelden is internet nodig (Three.js). Alle teksten zijn Nederlands en ook bedoeld voor wie niet aan het project werkte.
+Open `dashboard/dashboard.html` in de projectmap en kies een rit met **Kies een rit**. Elke uitvoering van `python -m jaguar.analyse.rit` werkt ditzelfde dashboard bij met alle `rit_*_analyse.json`-bestanden; de zojuist geanalyseerde rit is standaard geselecteerd. Ververs de browser na een nieuwe analyse. Het dashboard opent rechtstreeks in de browser, zonder server; voor de 3D-beelden is internet nodig (Three.js). Alle teksten zijn Nederlands en ook bedoeld voor wie niet aan het project werkte.
 
 Opbouw, van eenvoudig naar technisch:
 

@@ -1,6 +1,6 @@
 """Slipbewuste odometrie: vier wielencoders + gyro + accelerometer.
 
-Dezelfde klasse draait live in het rijscript en achteraf in analyse.py (herspeel()).
+Dezelfde klasse draait live in het rijscript en achteraf in rit.py (herspeel()).
 
 Wat de ritten lieten zien (zie README, "Afstand op elke ondergrond"):
   - De encoders komen op een vaste klok van 0,2 s; de wifi verschuift de ontvangsttijd ±20 ms.
@@ -80,7 +80,6 @@ class Odometrie:
         self.overbrug_t = 0.0
         self.onzekerheid = 0.0         # m, opgeteld over alle correcties (conservatief)
         self.afstand = 0.0             # som |ds|
-        self.afstand_wielen = 0.0      # som |gemiddelde van 4 wielen|, ter vergelijking
         self.gecorrigeerd = 0.0        # som |ds| waarbij niet het gemiddelde van 4 wielen telde
         self._ok_reeks = 0
         self.n_enc = 0                 # aantal verwerkte encoderpakketten
@@ -274,7 +273,6 @@ class Odometrie:
         self.x += ds * math.cos(k)
         self.y += ds * math.sin(k)
         self.afstand += abs(ds)
-        self.afstand_wielen += abs(gem)
         if modus not in ("normaal", "stil"):
             self.gecorrigeerd += abs(ds)
         self.modus = modus

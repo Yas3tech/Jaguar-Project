@@ -1,6 +1,6 @@
 """Rechtdoor rijden met optionele CSV; analyse achteraf met analyse.py."""
 import argparse
-from jaguar.robot import robot_session, prepare, positive_seconds, add_drive_args, run_segment
+from jaguar.kern.robot import robot_session, prepare, positive_seconds, add_drive_args, run_segment
 
 
 def main():

@@ -232,12 +232,9 @@ es.onmessage = (e) => {
   setConn(status.klaar ? ["ok", "rit klaar"] : ["ok", "live"]);
   applyOptions(m.opties);
   analyseState(m);
-  if (status.melding && status.melding !== lastMelding) { lastMelding = status.melding; msg(status.melding); }
   controlState(m.bediening);
   dirty = true;
 };
-
-let lastMelding = null;   // bericht van het rijscript 
 
 // Rijden vanaf de pagina (alleen met python bediening.py): parcours samenstellen, starten, STOP.
 const KINDS = { vooruit: ["Vooruit", "m", 1], achteruit: ["Achteruit", "m", 1], links: ["Links", "°", 90], rechts: ["Rechts", "°", 90] };

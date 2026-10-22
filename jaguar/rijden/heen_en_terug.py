@@ -1,7 +1,7 @@
-"""Fase 1: heen en terug rijden.  python -m jaguar.heen_en_terug --power 250 --distance 1.5"""
+"""Fase 1: heen en terug rijden.  python -m jaguar.rijden.heen_en_terug --power 250 --distance 1.5"""
 import argparse
 
-from jaguar.robot import add_drive_args, positive_seconds, prepare, robot_session, run_segment
+from jaguar.kern.robot import add_drive_args, positive_seconds, prepare, robot_session, run_segment
 
 
 def main():

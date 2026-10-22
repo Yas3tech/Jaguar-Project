@@ -1,6 +1,6 @@
 """Analyse van een rit-log (rechtdoor.py): rechtlijnigheid en niveau.
 
-Gebruik:  python -m jaguar.analyse [ritten/rit_....csv]   (standaard de nieuwste rit)
+Gebruik:  python -m jaguar.analyse.rit [ritten/rit_....csv]   (standaard de nieuwste rit)
 Schrijft ritten/<rit>_analyse.json en één dashboard.html met een ritselector.
 
 Aannames (Jaguar-handleiding + config OutDoorRobotConfig_4x4.xml):
@@ -23,14 +23,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from jaguar import odometrie
+from jaguar.kern import odometrie
 
 ACC_LSB_G = 256.0
 GYRO_LSB_DPS = 14.375     # datasheet; test_sondewiel.py draai meet de echte schaal (gyro_schaal)
 WHEEL_CNT = 300
 WHEEL_R = 0.135           # nominaal; kalibreer.py schrijft de gemeten effectieve straal naar config/kalibratie.json
 WHEEL_DIS = 0.52
-ROOT = Path(__file__).resolve().parent.parent   # projectmap
+ROOT = Path(__file__).resolve().parents[2]   # projectmap
 CALIBRATION = ROOT / "config" / "kalibratie.json"
 KALIBRATIE = json.loads(CALIBRATION.read_text(encoding="utf-8")) if CALIBRATION.exists() else {}
 WHEEL_R = KALIBRATIE.get("wielstraal_m", WHEEL_R)
@@ -191,7 +191,6 @@ def analyse(path):
     ax = [s["a"][0] / ACC_LSB_G for s in imu]
     ay = [s["a"][1] / ACC_LSB_G for s in imu]
     az = [s["a"][2] / ACC_LSB_G for s in imu]
-    gx = [(s["g"][0] - bias[0]) / GYRO_LSB_DPS for s in imu]
     gy = [(s["g"][1] - bias[1]) / GYRO_LSB_DPS for s in imu]
     gz = [(s["g"][2] - bias[2]) / GYRO_LSB_DPS for s in imu]
 

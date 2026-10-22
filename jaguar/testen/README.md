@@ -1,0 +1,9 @@
+# testen/ — zonder robot oefenen
+
+- `nep_robot.py`: speelt een opgenomen rit (`testdata/demo_rit.csv`) af alsof het de robot is.
+
+```
+python -m jaguar.testen.nep_robot
+python -m jaguar.rijden.rechtdoor --ip 127.0.0.1 --duration 5 --no-csv
+```
+De nep-robot speelt altijd dezelfde opname af, dus rijden op afstand reageert niet echt.

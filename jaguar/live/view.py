@@ -4,12 +4,12 @@ De Jaguar-reader geeft elke ontvangen regel door aan LiveView.feed(); dit verand
 niets aan het rijden of aan de CSV. De browser krijgt de gegevens via Server-Sent
 Events op /stream. Een nieuwe of herladen pagina krijgt eerst de hele rit tot nu toe.
 
-Live berekeningen zijn een benadering van analyse.py:
+Live berekeningen zijn een benadering van rit.py:
   - gyro-bias = mediaan van de rustfase (robuust tegen de oude berichten bij verbinden)
   - koers = geïntegreerde gyro-Z vanaf het einde van de rustfase, dt uit het IMU-volgnummer
   - afstand/snelheid/encoderkoers uit de encoders van beide motordrivers, nulpunt = einde rustfase
   - hoogte = som van sin(pitch) x afgelegde weg; pitch in stilstand uit de accelerometer, tijdens
-    het rijden uit de gyro-Y vanaf de laatste rusthoek (zoals analyse.py)
+    het rijden uit de gyro-Y vanaf de laatste rusthoek (zoals rit.py)
   - gebeurtenissen zoals in het dashboard: vastgelopen, schuin (> 7° minstens 1 s), vrije val (< 0,35 g)
 """
 import json
@@ -24,12 +24,12 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from jaguar.analyse import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
+from jaguar.analyse.rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PAGE = HERE / "pagina.html"
-DASHBOARD = ROOT / "dashboard" / "dashboard.html"   # geschreven door analyse.py
+DASHBOARD = ROOT / "dashboard" / "dashboard.html"   # geschreven door rit.py
 OPTIONS_FILE = HERE / "opties.json"   # bewaard tussen de ritten
 PANELS = ("koers", "baan", "snelheid", "pitchroll", "gyro", "versnelling")
 DEFAULT_OPTIONS = {"auto_analyse": False, "panelen": {p: True for p in PANELS}}
@@ -37,8 +37,8 @@ IMU_DT = 0.02             # IMU stuurt 50 Hz
 SPEED_CYCLES = 3          # encodersnelheid over 3 pollcycli (~0.6 s)
 ANGLE_ALPHA = 0.1         # laagdoorlaat pitch/roll (~0.2 s bij 50 Hz)
 GYRO_Y_SIGN = -1          # neus omhoog = negatieve gy (Y-as naar links); bevestigd op de ritten van 2/10
-VIB_SAMPLES = 10          # trillings-RMS over 0,2 s, zoals analyse.py
-# Drempels zoals analyse.py
+VIB_SAMPLES = 10          # trillings-RMS over 0,2 s, zoals rit.py
+# Drempels zoals rit.py
 TILT_DEG, TILT_MIN_S = 7.0, 1.0
 FREEFALL_G, FREEFALL_SAMPLES = 0.35, 3
 STALL_FRAC, STALL_MIN_S = 0.15, 1.0
@@ -85,13 +85,13 @@ class LiveView:
         self.analyse_lock = threading.Lock()
 
     def run_analysis(self):
-        """analyse.py op de CSV van deze rit; geeft (HTTP-status, antwoord) terug."""
+        """rit.py op de CSV van deze rit; geeft (HTTP-status, antwoord) terug."""
         if self.csv_path is None:
             return 409, {"fout": "Deze rit heeft geen CSV (--no-csv)."}
         if not self.csv_ready:
             return 409, {"fout": "De rit loopt nog."}
         with self.analyse_lock:
-            from jaguar import analyse
+            from jaguar.analyse import rit as analyse
             try:
                 result, out_html = analyse.run(self.csv_path)
             except Exception as e:  # noqa: BLE001 - de fout hoort in de browser, de server moet blijven draaien
@@ -163,7 +163,7 @@ class LiveView:
                              r(self.travelled), r(self.height, 4), r(vib, 4), event, r(self.pitch_h, 2)])
 
     def _event(self, t, phase, power, a):
-        """Gebeurtenis op dit moment, met dezelfde drempels als analyse.py."""
+        """Gebeurtenis op dit moment, met dezelfde drempels als rit.py."""
         self.freefall_n = self.freefall_n + 1 if math.sqrt(sum(v * v for v in a)) < FREEFALL_G else 0
         if self.freefall_n >= FREEFALL_SAMPLES:
             return "vrije val"
@@ -314,7 +314,7 @@ def _handler(hub):
             if self.path == "/options":
                 return self._json(200, save_options(raw))
             if hub.control is None:
-                return self._json(404, {"fout": "Ritten starten kan alleen met python -m jaguar.bediening."})
+                return self._json(404, {"fout": "Ritten starten kan alleen met python -m jaguar.rijden.bediening."})
             return self._json(*hub.control.start(raw))
 
         def _json(self, code, answer):
