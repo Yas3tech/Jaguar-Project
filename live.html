@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaguar live</title>
+<style>
+/* Live meetscherm tijdens het rijden. Geen externe bronnen: de laptop zit op de robot-wifi zonder internet. */
+:root {
+  --bg: #f3f5f4; --surface: #fcfdfc; --ink: #17201d; --ink-2: #4d5753; --ink-3: #7b8581;
+  --rule: #d9dfdc; --grid: #e6eae8; --band: #e9eeeb;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1f9e6a;
+  --good: #0a6e0a; --warn: #8a5a00; --bad: #b3261e; --chip: #e4e9e7;
+  --f-body: "Segoe UI", system-ui, sans-serif;
+  --f-data: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121615; --surface: #1a1f1d; --ink: #eef2f0; --ink-2: #b9c2be; --ink-3: #87918d;
+    --rule: #2f3633; --grid: #262c2a; --band: #232a27; --s1: #3987e5; --s2: #e0703f; --s3: #35b47f;
+    --good: #5fd35f; --warn: #fab219; --bad: #ff8a80; --chip: #2a312e; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+h1 { font-size: 24px; margin: 0; font-weight: 600; }
+.sub { font-family: var(--f-data); font-size: 12px; color: var(--ink-3); }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--chip); font-weight: 600; font-size: 13px; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.ok { color: var(--good); } .wait { color: var(--warn); } .bad { color: var(--bad); }
+.tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.tile { background: var(--surface); padding: 10px 12px; min-width: 0; }
+@media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tile .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
+.tile .v { white-space: nowrap; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tile .v small { font-size: 13px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.tile .n { font-family: var(--f-data); font-size: 11.5px; color: var(--ink-3); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 12px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; align-content: start; }
+.panel h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--ink-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend b { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+canvas { width: 100%; height: 190px; display: block; }
+canvas.square { height: 260px; }
+.note { font-size: 12px; color: var(--ink-3); margin: 0; }
+/* Analyse: knop in de kop, dashboard in een venster boven de live pagina */
+.actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.btn { font: inherit; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--s1); background: var(--s1); color: #fff; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+.btn:disabled { cursor: default; background: var(--chip); border-color: var(--rule); color: var(--ink-3); }
+.btn:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+#a-msg { font-size: 12px; color: var(--ink-3); }
+#a-msg.bad { color: var(--bad); }
+dialog { padding: 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); color: var(--ink); overflow: hidden; }
+#dlg { width: min(1400px, 96vw); height: 92vh; }
+#dlg-opt { width: min(560px, 96vw); max-height: 92vh; }
+dialog[open] { display: flex; flex-direction: column; }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+.dlg-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+.dlg-head h2 { font-size: 15px; margin: 0; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlg-head a { font-size: 13px; color: var(--s1); }
+dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+/* Opties-venster */
+.opt-body { overflow-y: auto; padding: 12px 14px; display: grid; gap: 14px; }
+.opt-body section { display: grid; gap: 10px; }
+.opt-body section + section { border-top: 1px solid var(--rule); padding-top: 12px; }
+.opt-body h3 { font-size: 13px; margin: 0; font-weight: 600; color: var(--ink-2); }
+.opt-body label.row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.opt-body label.row input { width: 18px; height: 18px; margin: 0; accent-color: var(--s1); flex: none; }
+.opt-body .field { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 10px; }
+.opt-body select { font: inherit; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); max-width: 180px; }
+.opt-body fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+.opt-body fieldset:disabled { opacity: .5; }
+.opt-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 14px; }
+/* Rijden */
+#dlg-rit { width: min(600px, 96vw); max-height: 92vh; }
+.btn.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-size: 15px; padding: 7px 22px; letter-spacing: .05em; }
+.steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps li { padding-left: 4px; }
+.steps .row { display: flex; align-items: center; gap: 8px; }
+.steps .kind { width: 82px; font-weight: 600; }
+.steps input, #r-power { font: inherit; width: 84px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); }
+.steps .unit { color: var(--ink-3); width: 18px; }
+.steps button { font: inherit; border: 0; background: none; color: var(--ink-3); cursor: pointer; padding: 2px 6px; font-size: 16px; line-height: 1; }
+.steps button:hover { color: var(--bad); }
+.steps button:disabled { visibility: hidden; }
+.add { display: flex; flex-wrap: wrap; gap: 6px; }
+.add .btn { padding: 4px 10px; }
+#rit-msg.bad { color: var(--bad); }
+#opt-state { font-size: 12px; color: var(--ink-3); }
+#opt-state.ok { color: var(--good); } #opt-state.bad { color: var(--bad); }
+.panel[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Jaguar live</h1>
+    <span id="conn" class="chip wait"><i></i>wachten op script</span>
+    <span id="name" class="sub"></span>
+    <div class="actions">
+      <span id="a-msg" role="status"></span>
+      <button id="b-stop" class="btn stop" hidden title="Motoren 0 en E-Stop aan (spatiebalk)">STOP</button>
+      <button id="b-rit" class="btn" hidden>Rijden</button>
+      <button id="b-opt" class="btn ghost">Opties</button>
+      <button id="b-dash" class="btn ghost" hidden>Dashboard openen</button>
+      <button id="b-analyse" class="btn" disabled>Analyse</button>
+    </div>
+  </header>
+
+  <dialog id="dlg" aria-labelledby="dlg-title">
+    <div class="dlg-head">
+      <h2 id="dlg-title">Analyse</h2>
+      <a href="/dashboard" target="_blank" rel="noopener">nieuw tabblad</a>
+      <button id="b-close" class="btn ghost" aria-label="Sluiten">Sluiten</button>
+    </div>
+    <iframe id="dlg-frame" title="Dashboard van de rit"></iframe>
+  </dialog>
+
+  <dialog id="dlg-rit" aria-labelledby="rit-title">
+    <div class="dlg-head">
+      <h2 id="rit-title">Parcours rijden</h2>
+      <button id="b-rit-close" class="btn ghost">Sluiten</button>
+    </div>
+    <div class="opt-body">
+      <section>
+        <h3>Stappen</h3>
+        <ol id="steps" class="steps"></ol>
+        <div class="add">
+          <button class="btn ghost" data-add="vooruit">+ Vooruit</button>
+          <button class="btn ghost" data-add="achteruit">+ Achteruit</button>
+          <button class="btn ghost" data-add="links">+ Links</button>
+          <button class="btn ghost" data-add="rechts">+ Rechts</button>
+        </div>
+        <p class="note" id="steps-sum"></p>
+      </section>
+      <section>
+        <div class="field"><label for="r-power">Vermogen</label>
+          <span><input id="r-power" type="number" min="50" max="600" step="10" value="250"> <span class="note" id="r-speed"></span></span></div>
+      </section>
+      <section>
+        <p class="note">Vrije ruimte rond de robot en de noodstop bij de hand. Vóór het rijden staat de robot 3 s stil (rustmeting).
+          Tijdens de rit stopt de rode knop STOP of de spatiebalk de robot.</p>
+        <p id="rit-msg" class="note" role="status"></p>
+        <div><button id="b-go" class="btn">Start rit</button></div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-opt" aria-labelledby="opt-title">
+    <div class="dlg-head">
+      <h2 id="opt-title">Opties</h2>
+      <span id="opt-state" role="status"></span>
+      <button id="b-opt-close" class="btn ghost">Sluiten</button>
+    </div>
+    <div class="opt-body">
+      <section>
+        <h3>Grafieken</h3>
+        <div class="opt-panels">
+          <label class="row"><input type="checkbox" data-opt="koers"> Koers</label>
+          <label class="row"><input type="checkbox" data-opt="baan"> Geschatte baan</label>
+          <label class="row"><input type="checkbox" data-opt="snelheid"> Snelheid</label>
+          <label class="row"><input type="checkbox" data-opt="pitchroll"> Pitch en roll</label>
+          <label class="row"><input type="checkbox" data-opt="gyro"> Gyro</label>
+          <label class="row"><input type="checkbox" data-opt="versnelling"> Versnelling</label>
+        </div>
+      </section>
+      <section>
+        <h3>Na de rit</h3>
+        <label class="row"><input type="checkbox" id="o-auto"> Vanzelf analyseren en het dashboard openen</label>
+      </section>
+      <p class="note">Wijzigingen gelden meteen, ook op andere apparaten die meekijken, en blijven bewaard voor de volgende ritten.</p>
+    </div>
+  </dialog>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Fase</div><div class="v" id="v-fase">–</div><div class="n" id="n-tijd">t = –</div></div>
+    <div class="tile"><div class="k">Motoropdracht</div><div class="v" id="v-pwr">–</div><div class="n">van ±1000, open-loop</div></div>
+    <div class="tile"><div class="k">Snelheid</div><div class="v" id="v-v">–</div><div class="n">encoders, over ~0,6 s</div></div>
+    <div class="tile"><div class="k">Afstand</div><div class="v" id="v-s">–</div><div class="n" id="n-xy">x – · y –</div></div>
+    <div class="tile"><div class="k">Koers gyro</div><div class="v" id="v-h">–</div><div class="n" id="n-he">encoders –</div></div>
+    <div class="tile"><div class="k">Pitch / roll</div><div class="v" id="v-pr">–</div><div class="n">accelerometer, gefilterd</div></div>
+    <div class="tile"><div class="k">Batterij</div><div class="v" id="v-bat">–</div><div class="n">stop onder 22,2 V</div></div>
+    <div class="tile"><div class="k">Stroom / temp</div><div class="v" id="v-a">–</div><div class="n" id="n-t">temp –</div></div>
+    <div class="tile"><div class="k">E-Stop</div><div class="v" id="v-es">–</div><div class="n" id="n-ff">FF –</div></div>
+    <div class="tile"><div class="k">IMU</div><div class="v" id="v-hz">–</div><div class="n" id="n-bias">bias –</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel" data-panel="koers"><h2>Koers</h2>
+      <div class="legend"><span><b style="background:var(--s1)"></b>gyro (Z)</span><span><b style="background:var(--s2)"></b>encoders (rechts − links)</span></div>
+      <canvas id="c-koers"></canvas></div>
+    <div class="panel" data-panel="baan"><h2>Geschatte baan · bovenaanzicht</h2>
+      <canvas id="c-baan" class="square"></canvas>
+      <p class="note">Encoderafstand + gyrokoers, gelijke schaal. Positieve y = links.</p></div>
+    <div class="panel" data-panel="snelheid"><h2>Snelheid en motoropdracht</h2>
+      <div class="legend"><span><b style="background:var(--s1)"></b>snelheid m/s</span><span><b style="background:var(--s2)"></b>opdracht /1000</span></div>
+      <canvas id="c-v"></canvas></div>
+    <div class="panel" data-panel="pitchroll"><h2>Pitch en roll</h2>
+      <div class="legend"><span><b style="background:var(--s1)"></b>pitch (neus omhoog +)</span><span><b style="background:var(--s2)"></b>roll (linkerkant hoger +)</span></div>
+      <canvas id="c-pr"></canvas></div>
+    <div class="panel" data-panel="gyro"><h2>Gyro</h2>
+      <div class="legend"><span><b style="background:var(--s1)"></b>X °/s</span><span><b style="background:var(--s2)"></b>Y °/s</span><span><b style="background:var(--s3)"></b>Z °/s</span></div>
+      <canvas id="c-g"></canvas></div>
+    <div class="panel" data-panel="versnelling"><h2>Versnelling</h2>
+      <div class="legend"><span><b style="background:var(--s1)"></b>X g</span><span><b style="background:var(--s2)"></b>Y g</span><span><b style="background:var(--s3)"></b>Z g</span></div>
+      <canvas id="c-a"></canvas></div>
+  </div>
+  <p class="note">Grijze achtergrond = robot krijgt een rijopdracht. Live waarden zijn een snelle benadering; de definitieve cijfers komen uit analyse_rit.py op de CSV.</p>
+</div>
+
+<script>
+// Rij: [t, fase, opdracht, [gx,gy,gz], [ax,ay,az], pitch, roll, koers, encoderkoers, snelheid, afstand, x, y]
+let rows = [], run = null, status = {}, bias = null, dirty = true;
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const nl = (v, d = 2) => v == null || isNaN(v) ? "–" : v.toFixed(d).replace(".", ",").replace(/^-/, "−");
+const DRIVE = new Set(["rijden", "heen", "terug"]);
+
+const es = new EventSource("/stream");
+es.onmessage = (e) => {
+  const m = JSON.parse(e.data);
+  if (m.run !== run) {   // nieuwe rit (ook gestart vanaf deze pagina): grafieken en analyse opnieuw
+    run = m.run; rows = [];
+    analysed = 0; frameSrc = null; autoDone = false; msg("");
+  }
+  if (m.start === rows.length) rows.push(...m.rijen);
+  status = m.status; bias = m.bias;
+  $("name").textContent = m.naam;
+  setConn(status.klaar ? ["ok", "rit klaar"] : ["ok", "live"]);
+  applyOptions(m.opties);
+  analyseState(m);
+  if (status.melding && status.melding !== lastMelding) { lastMelding = status.melding; msg(status.melding); }
+  controlState(m.bediening);
+  dirty = true;
+};
+
+let lastMelding = null;   // bericht van het rijscript 
+
+// Rijden vanaf de pagina (alleen met python bediening.py): parcours samenstellen, starten, STOP.
+const KINDS = { vooruit: ["Vooruit", "m", 1], achteruit: ["Achteruit", "m", 1], links: ["Links", "°", 90], rechts: ["Rechts", "°", 90] };
+let steps = [["vooruit", 1]], lastResult = null;
+try {   // laatste parcours van deze browser
+  const s = JSON.parse(localStorage.getItem("jaguar-parcours")).filter((x) => KINDS[x?.[0]] && +x[1] > 0).map(([k, v]) => [k, +v]);
+  if (s.length) steps = s;
+} catch {}
+function controlState(b) {
+  $("b-rit").hidden = !b || !b.mag_starten || b.bezig;
+  $("b-stop").hidden = !b || !b.bezig;
+  if (b?.bezig && $("dlg-rit").open) $("dlg-rit").close();
+  const key = b && !b.bezig ? `${b.resultaat}|${b.fout}` : null;
+  if (key !== lastResult) {
+    lastResult = key;
+    if (b?.resultaat === "gestopt") msg("rit gestopt met STOP", true);
+    else if (b?.resultaat === "fout") msg(`rit niet gelukt: ${b.fout}`, true);
+  }
+}
+function renderSteps() {
+  $("steps").innerHTML = "";
+  steps.forEach(([kind, value], i) => {
+    const [label, unit] = KINDS[kind];
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="row"><span class="kind">${label}</span>
+      <input type="number" min="0" step="${unit === "m" ? 0.1 : 5}" value="${value}" aria-label="${label} in ${unit === "m" ? "meter" : "graden"}">
+      <span class="unit">${unit}</span><button aria-label="Stap ${i + 1} weghalen" ${steps.length < 2 ? "disabled" : ""}>×</button></span>`;
+    li.querySelector("input").oninput = (e) => { steps[i][1] = parseFloat(e.target.value.replace(",", ".")) || 0; summary(); };
+    li.querySelector("button").onclick = () => { steps.splice(i, 1); renderSteps(); };
+    $("steps").append(li);
+  });
+  summary();
+}
+function summary() {
+  try { localStorage.setItem("jaguar-parcours", JSON.stringify(steps)); } catch {}
+  $("steps-sum").textContent = "Zelfde als: python parcours.py " +
+    steps.map(([k, v]) => `${k[0]}:${String(v).replace(".", ",")}`).join(" ");
+  const p = +$("r-power").value;
+  $("r-speed").textContent = p ? `≈ ${nl(p * 0.0031, 1)} m/s op vlakke grond` : "";
+}
+for (const b of document.querySelectorAll("[data-add]"))
+  b.onclick = () => { steps.push([b.dataset.add, KINDS[b.dataset.add][2]]); renderSteps(); };
+$("r-power").oninput = summary;
+$("b-rit").onclick = () => { $("rit-msg").textContent = ""; renderSteps(); $("dlg-rit").showModal(); };
+$("b-rit-close").onclick = () => $("dlg-rit").close();
+$("b-go").onclick = async () => {
+  const m = $("rit-msg");
+  m.className = "note"; m.textContent = "starten…";
+  try {
+    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stappen: steps, power: Math.round(+$("r-power").value) }) });
+    const a = await r.json();
+    if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    $("dlg-rit").close();
+  } catch (e) {
+    m.className = "note bad"; m.textContent = e instanceof TypeError ? "geen verbinding met bediening.py" : e.message;
+  }
+};
+async function stopRobot() {
+  try { await fetch("/stop", { method: "POST" }); }
+  catch { msg("STOP niet aangekomen: gebruik de noodstop!", true); }
+}
+$("b-stop").onclick = stopRobot;
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !$("b-stop").hidden && !e.target.closest("input, select, textarea")) { e.preventDefault(); stopRobot(); }
+});
+
+// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen.
+function applyOptions(o) {
+  if (!o) return;
+  for (const p of document.querySelectorAll("[data-panel]")) {
+    const show = o.panelen[p.dataset.panel] !== false;
+    if (p.hidden === show) { p.hidden = !show; dirty = true; }
+  }
+}
+es.onerror = () => {
+  setConn(status.klaar ? ["ok", "rit klaar · script gestopt"] : ["bad", "geen verbinding met script"]);
+  if (!busy) { $("b-analyse").disabled = true; msg(frameSrc ? "" : "script gestopt: analyse niet meer mogelijk"); }
+};
+function setConn([cls, txt]) { const c = $("conn"); c.className = "chip " + cls; c.lastChild.textContent = txt; }
+
+// Analyse: het rijscript houdt de server na de rit open; POST /analyse draait analyse_rit.py op deze CSV.
+let busy = false, frameSrc = null, analysed = 0;
+function msg(text, bad = false) { const e = $("a-msg"); e.textContent = text; e.className = bad ? "bad" : ""; }
+function analyseState(m) {
+  if (busy) return;
+  const b = $("b-analyse");
+  b.disabled = !m.csv || !m.csv_klaar;
+  b.textContent = analysed ? "Opnieuw analyseren" : "Analyse";
+  $("b-dash").hidden = !m.dashboard && !frameSrc;
+  if (!m.csv) { if (!m.bediening) msg("geen CSV: geen analyse"); }
+  else if (!m.csv_klaar) msg("analyse na de rit");
+  else if (!$("a-msg").classList.contains("bad")) msg("");
+  // Optie: na de rit vanzelf analyseren (één keer per rit).
+  if (m.opties?.auto_analyse && m.csv && m.csv_klaar && !analysed && !autoDone) { autoDone = true; b.click(); }
+}
+let autoDone = false;
+$("b-analyse").onclick = async () => {
+  const b = $("b-analyse");
+  busy = true; b.disabled = true; b.textContent = "Analyse loopt…"; msg("");
+  try {
+    const r = await fetch("/analyse", { method: "POST" });
+    const a = await r.json();
+    if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    analysed++;
+    frameSrc = null;              // nieuw dashboard: het venster laadt opnieuw
+    $("b-dash").hidden = false;
+    openDash();
+  } catch (e) {
+    msg(e instanceof TypeError ? "geen verbinding met het script" : e.message, true);
+  } finally {
+    busy = false; b.disabled = false; b.textContent = analysed ? "Opnieuw analyseren" : "Analyse";
+  }
+};
+function openDash() {
+  // Eén keer laden per analyse: heropenen toont hetzelfde dashboard, ook als het script al gestopt is.
+  if (!frameSrc) { frameSrc = `/dashboard?v=${Date.now()}`; $("dlg-frame").src = frameSrc; }
+  $("dlg-title").textContent = `Analyse · ${$("name").textContent}`;
+  $("dlg").showModal();
+}
+$("b-dash").onclick = openDash;
+$("b-close").onclick = () => $("dlg").close();
+for (const d of document.querySelectorAll("dialog"))
+  d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // klik naast het venster
+
+// Opties-venster: bewaren op de server (POST /options); /options opent de pagina met dit venster open.
+function fillOptions(o) {
+  $("o-auto").checked = o.auto_analyse;
+  for (const c of document.querySelectorAll("[data-opt]")) c.checked = o.panelen[c.dataset.opt] !== false;
+}
+function optState(text, cls = "") { $("opt-state").textContent = text; $("opt-state").className = cls; }
+async function openOptions() {
+  optState("");
+  try { fillOptions(await (await fetch("/options.json")).json()) }
+  catch { optState("geen verbinding met het script", "bad"); }
+  $("dlg-opt").showModal();
+}
+$("b-opt").onclick = openOptions;
+$("b-opt-close").onclick = () => $("dlg-opt").close();
+$("dlg-opt").addEventListener("close", () => { if (location.pathname === "/options") history.replaceState(null, "", "/"); });
+$("dlg-opt").addEventListener("change", async () => {
+  const o = {
+    auto_analyse: $("o-auto").checked,
+    panelen: Object.fromEntries([...document.querySelectorAll("[data-opt]")].map((c) => [c.dataset.opt, c.checked])),
+  };
+  optState("bewaren…");
+  try {
+    const r = await fetch("/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(o) });
+    const saved = await r.json();
+    if (!r.ok) throw new Error(saved.fout || `HTTP ${r.status}`);
+    fillOptions(saved); applyOptions(saved);
+    optState("bewaard", "ok");
+  } catch (e) {
+    optState(e instanceof TypeError ? "geen verbinding met het script: niet bewaard" : e.message, "bad");
+  }
+});
+if (location.pathname === "/options") openOptions();
+
+function tiles() {
+  const r = rows[rows.length - 1];
+  $("v-fase").textContent = status.fase || "–";
+  if (r) {
+    $("n-tijd").textContent = `t = ${nl(r[0], 1)} s`;
+    $("v-pwr").textContent = r[2];
+    $("v-v").innerHTML = `${nl(r[9])}<small>m/s</small>`;
+    $("v-s").innerHTML = `${nl(r[10])}<small>m</small>`;
+    $("n-xy").textContent = `x ${nl(r[11])} m · y ${nl(r[12] * 100, 1)} cm`;
+    $("v-h").innerHTML = `${nl(r[7])}<small>°</small>`;
+    $("n-he").textContent = `encoders ${nl(r[8])}°`;
+    $("v-pr").innerHTML = `${nl(r[5], 1)}° <small>/</small> ${nl(r[6], 1)}°`;
+    const n = rows.filter((q) => q[0] > r[0] - 2).length;
+    $("v-hz").innerHTML = `${n > 1 ? Math.round(n / 2) : "–"}<small>Hz</small>`;
+  }
+  const bat = status.batterij_v;
+  $("v-bat").innerHTML = bat ? `<span class="${bat < 22.2 ? "bad" : ""}">${nl(bat, 1)}</span><small>V</small>` : "–";
+  const amps = Object.values(status.stroom_a || {}).flat();
+  $("v-a").innerHTML = amps.length ? `${nl(Math.max(...amps), 1)}<small>A max</small>` : "–";
+  const temps = Object.values(status.temp_c || {}).flat();
+  $("n-t").textContent = temps.length ? `temp max ${Math.max(...temps)} °C` : "temp –";
+  const ff = status.fault || {};
+  const estop = Object.values(ff).some((v) => v & 16);
+  $("v-es").innerHTML = Object.keys(ff).length ? `<span class="${estop ? "warn" : "ok"}">${estop ? "actief" : "vrij"}</span>` : "–";
+  $("n-ff").textContent = `FF ${Object.entries(ff).map(([b, v]) => `${b}=${v}`).join(" ") || "–"}`;
+  $("n-bias").textContent = bias ? `bias ${bias.map((b) => nl(b, 1)).join(" · ")}` : "bias: rustfase loopt";
+}
+
+function setup(cv) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = w * dpr; cv.height = h * dpr; }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = `11px ${css("--f-data")}`;
+  return [ctx, w, h];
+}
+function ticks(lo, hi, n = 4) {
+  const step = Math.pow(10, Math.floor(Math.log10((hi - lo) / n || 1)));
+  const s = [1, 2, 5, 10].map((k) => k * step).find((k) => (hi - lo) / k <= n) || step * 10;
+  const out = []; for (let v = Math.ceil(lo / s) * s; v <= hi + 1e-9; v += s) out.push(+v.toFixed(6)); return out;
+}
+
+// Tijdgrafiek: series = [[kleurvar, rij => waarde], ...]
+function timeChart(id, series, minSpan = 1) {
+  const [ctx, w, h] = setup($(id));
+  if (!rows.length) return;
+  const L = 44, R = 8, T = 6, B = 20, pw = w - L - R, ph = h - T - B;
+  const t0 = rows[0][0], t1 = Math.max(rows[rows.length - 1][0], t0 + 5);
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rows) for (const [, f] of series) { const v = f(r); if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const X = (t) => L + (t - t0) / (t1 - t0) * pw, Y = (v) => T + (hi - v) / (hi - lo) * ph;
+  // rijfasen als achtergrondband
+  ctx.fillStyle = css("--band");
+  let start = null;
+  rows.forEach((r, i) => {
+    const d = DRIVE.has(r[1]);
+    if (d && start === null) start = r[0];
+    if (start !== null && (!d || i === rows.length - 1)) { ctx.fillRect(X(start), T, X(r[0]) - X(start), ph); start = null; }
+  });
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--ink-3"); ctx.lineWidth = 1;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const v of ticks(lo, hi)) { ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(w - R, Y(v)); ctx.stroke(); ctx.fillText(nl(v, Math.abs(v) < 10 && v % 1 ? 1 : 0), L - 6, Y(v)); }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const t of ticks(t0, t1, 6)) ctx.fillText(`${nl(t, 0)} s`, X(t), h - B + 5);
+  ctx.lineWidth = 1.6; ctx.lineJoin = "round";
+  for (const [color, f] of series) {
+    ctx.strokeStyle = css(color); ctx.beginPath();
+    rows.forEach((r, i) => i ? ctx.lineTo(X(r[0]), Y(f(r))) : ctx.moveTo(X(r[0]), Y(f(r))));
+    ctx.stroke();
+  }
+}
+
+function pathChart() {
+  const [ctx, w, h] = setup($("c-baan"));
+  if (!rows.length) return;
+  let xs = rows.map((r) => r[11]), ys = rows.map((r) => r[12]);
+  let x0 = Math.min(0, ...xs), x1 = Math.max(1, ...xs), y0 = Math.min(-0.25, ...ys), y1 = Math.max(0.25, ...ys);
+  const P = 26, k = Math.min((w - 2 * P) / (x1 - x0), (h - 2 * P) / (y1 - y0));
+  const cx = (w - k * (x1 - x0)) / 2, cy = (h - k * (y1 - y0)) / 2;
+  const X = (x) => cx + (x - x0) * k, Y = (y) => h - cy - (y - y0) * k;
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--ink-3"); ctx.lineWidth = 1;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const x of ticks(x0, x1, 6)) { ctx.beginPath(); ctx.moveTo(X(x), 4); ctx.lineTo(X(x), h - 18); ctx.stroke(); ctx.fillText(`${nl(x, x % 1 ? 1 : 0)} m`, X(x), h - 15); }
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = css("--ink-3");
+  ctx.beginPath(); ctx.moveTo(X(x0), Y(0)); ctx.lineTo(X(x1), Y(0)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = css("--s1"); ctx.lineWidth = 2; ctx.beginPath();
+  rows.forEach((r, i) => i ? ctx.lineTo(X(r[11]), Y(r[12])) : ctx.moveTo(X(r[11]), Y(r[12])));
+  ctx.stroke();
+  const r = rows[rows.length - 1], a = r[7] * Math.PI / 180;
+  ctx.save(); ctx.translate(X(r[11]), Y(r[12])); ctx.rotate(-a);
+  ctx.fillStyle = css("--s2"); ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(-6, 6); ctx.lineTo(-6, -6); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function draw() {
+  if (dirty) {
+    dirty = false;
+    tiles();
+    timeChart("c-koers", [["--s1", (r) => r[7]], ["--s2", (r) => r[8]]], 2);
+    pathChart();
+    timeChart("c-v", [["--s1", (r) => r[9]], ["--s2", (r) => r[2] / 1000]], 0.5);
+    timeChart("c-pr", [["--s1", (r) => r[5]], ["--s2", (r) => r[6]]], 2);
+    timeChart("c-g", [["--s1", (r) => r[3][0]], ["--s2", (r) => r[3][1]], ["--s3", (r) => r[3][2]]], 2);
+    timeChart("c-a", [["--s1", (r) => r[4][0]], ["--s2", (r) => r[4][1]], ["--s3", (r) => r[4][2]]], 0.5);
+  }
+  requestAnimationFrame(draw);
+}
+addEventListener("resize", () => dirty = true);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => dirty = true);
+draw();
+</script>
+</body>
+</html>

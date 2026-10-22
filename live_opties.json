@@ -1,0 +1,11 @@
+{
+  "auto_analyse": false,
+  "panelen": {
+    "koers": true,
+    "baan": true,
+    "snelheid": true,
+    "pitchroll": true,
+    "gyro": true,
+    "versnelling": true
+  }
+}
