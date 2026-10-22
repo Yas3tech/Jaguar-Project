@@ -101,7 +101,9 @@ input[type=number] { font-variant-numeric: tabular-nums; }
 .stuk.fout { border-color: var(--bad); }
 .stuk .kop { display: flex; align-items: center; gap: 8px; font-weight: 650; }
 .stuk .kop i { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-style: normal; font-size: 12px; display: grid; place-items: center; }
-.stuk .kop button { margin-left: auto; border: 0; background: none; cursor: pointer; color: var(--ink-3); font-size: 18px; line-height: 1; }
+.stuk .kop button.midden { margin-left: auto; font-size: 12px; font-weight: 600; border: 1px solid var(--rule); border-radius: 6px; padding: 2px 8px; color: var(--accent); }
+.stuk .kop button.midden:hover { background: var(--chip); color: var(--accent); }
+.stuk .kop button { margin-left: 0; border: 0; background: none; cursor: pointer; color: var(--ink-3); font-size: 18px; line-height: 1; }
 .stuk .kop button:hover { color: var(--bad); }
 .stuk .rij { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .stuk .rij label { display: grid; gap: 2px; font-size: 11px; color: var(--ink-3); }
@@ -205,9 +207,9 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
   <div class="werk">
     <div class="vlak" id="vlak">
       <canvas id="cv" aria-label="Tekenvlak voor het parcours"></canvas>
-      <div class="hulp" id="hulp"><span id="hulp-vrij"><b>Houd de muisknop ingedrukt en teken</b> vanaf de groene start. Laat los: de punten en bogen worden vanzelf gezet. <kbd>Alt</kbd> + slepen = het beeld schuiven · wiel = zoomen.</span>
+      <div class="hulp" id="hulp"><span id="hulp-vrij"><b>Houd de muisknop ingedrukt en teken</b> vanaf de groene start. Laat los: de punten en bogen worden vanzelf gezet. Pak het <b>+</b> in het midden van een stuk om er een punt in te zetten. <kbd>Alt</kbd> + slepen = het beeld schuiven · wiel = zoomen.</span>
         <span id="hulp-hand"><b>Sleep</b> om de kaart te verschuiven · wiel = zoomen. Kies ✎ Tekenen om weer te tekenen.</span>
-        <span id="hulp-punt"><b>Klik</b> om een punt toe te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen · rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</span><br>
+        <span id="hulp-punt"><b>Klik</b> om een punt toe te voegen (op een stuk = daar invoegen) · pak het <b>+</b> in het midden van een stuk en sleep het om een punt in te voegen · <b>sleep</b> een punt om het te verplaatsen · sleep het vlak om te schuiven · wiel = zoomen · rechtermuisknop op een punt = weghalen · <kbd>Shift</kbd> = niet vastklikken</span><br>
         <b>Liever niet tekenen?</b> <button class="btn" id="b-voorb2" style="padding:3px 10px;margin-top:4px">✦ Kies een voorbeeld</button></div>
       <div class="zweef"><button id="z-in" aria-label="Inzoomen">+</button><button id="z-uit" aria-label="Uitzoomen">−</button><button id="z-fit" aria-label="Alles in beeld" title="Alles in beeld">⤢</button></div>
       <div id="kaartmelding" hidden></div>
@@ -524,6 +526,10 @@ function teken() {
       for (let i = 0; i <= 20; i++) { const q = e.f(u * i / 20); const [sx, sy] = toS(q.x, q.y); started ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); started = true; } }
     ctx.stroke();
   }
+  // plusjes in het midden van elk stuk: pak er een vast en sleep om een punt in te voegen
+  if (S.tool !== "hand" && !(drag && drag.k === "teken")) for (const m of middens()) { const [sx, sy] = toS(m.x, m.y);
+    ctx.fillStyle = css("--surface"); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.6; ctx.globalAlpha = .92; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx - 3.2, sy); ctx.lineTo(sx + 3.2, sy); ctx.moveTo(sx, sy - 3.2); ctx.lineTo(sx, sy + 3.2); ctx.stroke(); ctx.globalAlpha = 1; }
   // lijn die je nu tekent
   if (drag && drag.k === "teken" && drag.raw.length > 1) { ctx.strokeStyle = css("--accent-2"); ctx.globalAlpha = .9; ctx.lineWidth = 3; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath();
     drag.raw.forEach((q, i) => { const [sx, sy] = toS(q[0], q[1]); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.stroke(); ctx.globalAlpha = 1; }
@@ -603,18 +609,19 @@ function stukken() {
     const turn = ang(phi - h), laatste = j === pts.length - 2;
     const fout = P.fouten.some((f) => f.startsWith(`Stuk ${j + 1} `));
     const d = document.createElement("div"); d.className = "stuk" + (fout ? " fout" : "");
-    d.innerHTML = `<div class="kop"><i>${j + 1}</i>Stuk ${j + 1}<button aria-label="Punt ${j + 1} weghalen" title="Dit punt en de rest weghalen">×</button></div>
+    d.innerHTML = `<div class="kop"><i>${j + 1}</i>Stuk ${j + 1}<button class="midden" aria-label="Een punt invoegen in het midden van stuk ${j + 1}" title="Een punt invoegen in het midden van dit stuk">＋ punt</button><button aria-label="Punt ${j + 1} weghalen" title="Dit punt en de rest weghalen">×</button></div>
       <div class="rij"><label>lengte (m)<input type="number" step="0.05" min="0.05" value="${len.toFixed(2)}"></label>
       <label>draai (° + = links)<input type="number" step="5" value="${turn.toFixed(0)}"></label>
       <label>${laatste ? "bocht" : "radius bocht (m)"}<input type="number" step="0.1" min="0" value="${laatste ? 0 : (pts[j + 1].r || 0)}" ${laatste ? "disabled" : ""}></label></div>`;
     const [iL, iT, iR] = d.querySelectorAll("input");
+    d.querySelector(".midden").onclick = () => { voegIn(j); sync(); melding("Punt ingevoegd in het midden van stuk " + (j + 1) + ": sleep het op de kaart"); };
     iL.onchange = () => { const nw = Math.max(0.05, parseFloat(iL.value.replace(",", "."))); if (!isFinite(nw)) return; snapshot(); const k = nw / (len || 1), ex = dx * k - dx, ey = dy * k - dy;
       if (len < 1e-6) { pts[j + 1].x = pts[j].x + nw * Math.cos(h * RAD); pts[j + 1].y = pts[j].y + nw * Math.sin(h * RAD); for (let q = j + 2; q < pts.length; q++) { pts[q].x += nw * Math.cos(h * RAD); pts[q].y += nw * Math.sin(h * RAD); } }
       else for (let q = j + 1; q < pts.length; q++) { pts[q].x += ex; pts[q].y += ey; } sync(); };
     iT.onchange = () => { const nt = parseFloat(iT.value.replace(",", ".")); if (!isFinite(nt)) return; snapshot(); const dr = (h + nt) - phi, c = Math.cos(dr * RAD), s = Math.sin(dr * RAD);
       for (let q = j + 1; q < pts.length; q++) { const rx = pts[q].x - pts[j].x, ry = pts[q].y - pts[j].y; pts[q].x = pts[j].x + rx * c - ry * s; pts[q].y = pts[j].y + rx * s + ry * c; } sync(); };
-    iR.onchange = () => { snapshot(); pts[j + 1].r = Math.max(0, parseFloat(iR.value.replace(",", ".")) || 0); sync(); };
-    d.querySelector("button").onclick = () => { snapshot(); S.pts = pts.slice(0, j + 1); sync(); };
+    iR.onchange = () => { snapshot(); pts[j + 1].r = Math.max(0, parseFloat(iR.value.replace(",", ".")) || 0); pts[j + 1].auto = false; sync(); };
+    d.querySelectorAll(".kop button")[1].onclick = () => { snapshot(); S.pts = pts.slice(0, j + 1); sync(); };
     el.append(d); h = phi;
   }
 }
@@ -723,6 +730,35 @@ $("t-punt").onclick = () => { S.tool = "punten"; toonGereedschap(); bewaar(); };
 for (const [id, w] of [["h-auto", "auto"], ["h-rond", "rond"], ["h-scherp", "scherp"]]) $(id).onclick = () => { S.hoeken = w; toonGereedschap(); opnieuwPassen(); bewaar(); };
 $("i-glad").oninput = () => { S.glad = +$("i-glad").value; opnieuwPassen(); bewaar(); };
 
+/* ------------------------------------------------ een punt invoegen in het midden van een stuk */
+function autoRadius(i) {                                      // radius van punt i volgens Auto / Rond / Scherp (zoals bij het tekenen)
+  const pts = S.pts, b = pts[i]; if (!b || i < 1 || i >= pts.length - 1) return;
+  const a = pts[i - 1], c = pts[i + 1], alpha = hoekTussen([a.x, a.y], [b.x, b.y], [c.x, c.y]) * RAD;
+  if (S.hoeken === "scherp" || alpha < 0.01 || alpha > 3.1 || (S.hoeken === "auto" && alpha * DEG >= HOEK_SCHERP)) { b.r = 0; return; }
+  const tmax = 0.5 * Math.min(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(c.x - b.x, c.y - b.y)), r = Math.min(10, tmax / Math.tan(alpha / 2));
+  b.r = r >= 0.3 ? +(r * 0.98).toFixed(2) : 0;
+}
+function voegIn(j, x, y) {                                    // nieuw punt op stuk j (tussen punt j en j+1), standaard in het midden
+  const a = S.pts[j], b = S.pts[j + 1]; if (!b) return -1;
+  if (x === undefined) { x = (a.x + b.x) / 2; y = (a.y + b.y) / 2; }
+  snapshot(); S.pts.splice(j + 1, 0, { x, y, r: 0, auto: true });
+  autoRadius(j + 1); return j + 1;
+}
+function middens() {                                          // [{j, x, y}] voor elk stuk dat lang genoeg is op het scherm
+  const o = [];
+  for (let j = 0; j < S.pts.length - 1; j++) { const a = S.pts[j], b = S.pts[j + 1], [ax, ay] = toS(a.x, a.y), [bx, by] = toS(b.x, b.y);
+    if (Math.hypot(bx - ax, by - ay) > 46) o.push({ j, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); }
+  return o;
+}
+function raakMidden(sx, sy) { for (const m of middens()) { const [px, py] = toS(m.x, m.y); if (Math.hypot(px - sx, py - sy) < 11) return m; } return null; }
+function raakStuk(sx, sy) {                                   // dichtstbijzijnde stuk binnen 9 beeldpunten (niet vlak bij een punt): {j, x, y}
+  let best = null, dBest = 9;
+  for (let j = 0; j < S.pts.length - 1; j++) { const [ax, ay] = toS(S.pts[j].x, S.pts[j].y), [bx, by] = toS(S.pts[j + 1].x, S.pts[j + 1].y), dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-9;
+    const t = Math.max(0, Math.min(1, ((sx - ax) * dx + (sy - ay) * dy) / L2)), d = Math.hypot(sx - ax - t * dx, sy - ay - t * dy);
+    if (d < dBest && t > 0.04 && t < 0.96 && Math.hypot(sx - ax, sy - ay) > 14 && Math.hypot(sx - bx, sy - by) > 14) { dBest = d; const [wx, wy] = toW(ax + t * dx, ay + t * dy); best = { j, x: wx, y: wy }; } }
+  return best;
+}
+
 /* muis en aanraking */
 let drag = null;
 const snapOn = (e) => !e.shiftKey;
@@ -735,15 +771,17 @@ cv.addEventListener("pointerdown", (e) => {
   if (Math.hypot(handle.x - sx, handle.y - sy) < 13) { drag = { k: "richting" }; snapshot(); cv.className = "draai"; return; }
   const i = raak(sx, sy);
   if (i > 0) { drag = { k: "punt", i }; snapshot(); return; }
+  const mid = raakMidden(sx, sy);
+  if (mid) { const k = voegIn(mid.j); drag = { k: "punt", i: k }; sync(); return; }
   if (S.tool === "vrij" && e.button === 0 && !e.altKey) { const [wx, wy] = toW(sx, sy); drag = { k: "teken", raw: [[wx, wy]], sx, sy }; cv.className = ""; dirty = true; return; }
   drag = { k: "pan", sx, sy, cx: S.view.cx, cy: S.view.cy, bewogen: false };
 });
 cv.addEventListener("pointermove", (e) => {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-  if (!drag) { if (S.tool === "hand" || spatie) { cv.className = "grab"; return; } cv.className = Math.hypot(handle.x - sx, handle.y - sy) < 13 ? "draai" : raak(sx, sy) > 0 ? "grab" : ""; return; }
+  if (!drag) { if (S.tool === "hand" || spatie) { cv.className = "grab"; return; } cv.className = Math.hypot(handle.x - sx, handle.y - sy) < 13 ? "draai" : (raak(sx, sy) > 0 || raakMidden(sx, sy)) ? "grab" : ""; return; }
   if (drag.k === "richting") { const [wx, wy] = toW(sx, sy); let b = Math.atan2(wx, wy) * DEG; b = (b + 360) % 360;
     if (snapOn(e)) { const st = S.modus === "binnen" ? 90 : 5; b = (Math.round(b / st) * st) % 360; } S.b0 = b; $("i-b0").value = Math.round(b); for (const x of document.querySelectorAll("[data-b0]")) x.setAttribute("aria-pressed", +x.dataset.b0 === Math.round(b)); sync(); }
-  else if (drag.k === "punt") { const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e); S.pts[drag.i].x = qx; S.pts[drag.i].y = qy; sync(); }
+  else if (drag.k === "punt") { const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e); S.pts[drag.i].x = qx; S.pts[drag.i].y = qy; if (S.pts[drag.i].auto) autoRadius(drag.i); sync(); }
   else if (drag.k === "teken") { if (Math.hypot(sx - drag.sx, sy - drag.sy) >= 4) { const [wx, wy] = toW(sx, sy); drag.raw.push([wx, wy]); drag.sx = sx; drag.sy = sy; dirty = true; } }
   else { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) { drag.bewogen = true; cv.className = "pan"; } if (drag.bewogen) { S.view.cx = drag.cx - (sx - drag.sx) / S.view.ppm; S.view.cy = drag.cy + (sy - drag.sy) / S.view.ppm; dirty = true; bewaar(); } }
 });
@@ -751,11 +789,14 @@ cv.addEventListener("pointerup", (e) => {
   const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
   if (drag && drag.k === "teken") { const raw = drag.raw; drag = null; cv.className = ""; dirty = true; streekKlaar(raw); return; }
   if (drag && drag.k === "pan" && !drag.bewogen && S.tool === "punten" && !spatie && e.button !== 1) {                      // klik zonder slepen = punt toevoegen
-    const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e), last = S.pts[S.pts.length - 1];
-    if (Math.hypot(qx - last.x, qy - last.y) > 0.04) { snapshot(); S.pts.push({ x: qx, y: qy, r: 0 }); sync(); }
+    const [wx, wy] = toW(sx, sy), [qx, qy] = vastklikken(wx, wy, e), last = S.pts[S.pts.length - 1], stuk = raakStuk(sx, sy);
+    if (stuk) { voegIn(stuk.j, stuk.x, stuk.y); sync(); }                       // klik op een stuk: daar een punt invoegen
+    else if (Math.hypot(qx - last.x, qy - last.y) > 0.04) { snapshot(); S.pts.push({ x: qx, y: qy, r: 0, auto: true }); autoRadius(S.pts.length - 2); sync(); }
   }
   drag = null; cv.className = S.tool === "hand" || spatie ? "grab" : "";
 });
+cv.addEventListener("dblclick", (e) => { if (S.tool === "hand") return; const r = cv.getBoundingClientRect(), stuk = raakStuk(e.clientX - r.left, e.clientY - r.top);
+  if (stuk) { const [qx, qy] = vastklikken(stuk.x, stuk.y, e); voegIn(stuk.j, qx, qy); sync(); melding("Punt ingevoegd: sleep het om de route te veranderen"); } });
 cv.addEventListener("contextmenu", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), i = raak(e.clientX - r.left, e.clientY - r.top); if (i > 0) { snapshot(); S.pts.splice(i, 1); sync(); } });
 cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top, [wx, wy] = toW(sx, sy);
   S.view.ppm = Math.max(6, Math.min(600, S.view.ppm * Math.exp(-e.deltaY * 0.0015))); S.view.cx = wx - (sx - W / 2) / S.view.ppm; S.view.cy = wy + (sy - H / 2) / S.view.ppm; dirty = true; bewaar(); }, { passive: false });
@@ -998,6 +1039,14 @@ function interactietest() {
   ok(Math.round(S.b0) === 90, `richting naar rechts = ${Math.round(S.b0)}°`);
   ok(P.stappen[0][0] === "vooruit" || P.stappen[0][0] === "links" || P.stappen[0][0] === "rechts", "plan is opnieuw berekend");
   try {
+  // een punt invoegen in het midden van een stuk
+  S.tool = "punten"; S.hoeken = "auto"; S.pts = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 4, r: 0 }, { x: 4, y: 4, r: 0 }]; S.view = { cx: 2, cy: 2, ppm: 80 }; toonGereedschap(); sync();
+  { const n = S.pts.length, len0 = P.lengte; const [mx, my] = toS(0, 2); ev("pointerdown", mx, my); const [tx, ty] = toS(-1.5, 2.5); ev("pointermove", tx, ty); ev("pointerup", tx, ty);
+    ok(S.pts.length === n + 1 && Math.abs(S.pts[1].x + 1.5) < 0.1 && Math.abs(S.pts[1].y - 2.5) < 0.1, `plusje in het midden gesleept: nieuw punt (${S.pts[1].x.toFixed(2)}, ${S.pts[1].y.toFixed(2)})`);
+    ok(!P.fouten.length && P.lengte > len0 - 0.5, "route blijft geldig na het invoegen");
+    const m2 = S.pts.length; const [ax, ay] = toS(2, 4); ev("pointerdown", ax, ay); ev("pointerup", ax, ay); ok(S.pts.length === m2 + 1, "klik op een stuk voegt daar een punt in (niet aan het einde)");
+    const m3 = S.pts.length; voegIn(0); ok(S.pts.length === m3 + 1 && S.pts[1].x === (S.pts[0].x + S.pts[2].x) / 2, "knop per stuk voegt in het midden in");
+    undo(); ok(S.pts.length === m3, "ongedaan maken haalt het ingevoegde punt weer weg"); }
   // hand: sleept de kaart en zet geen punt
   S.tool = "hand"; toonGereedschap(); { const n0 = S.pts.length, cx0 = S.view.cx; ev("pointerdown", 200, 200); ev("pointermove", 260, 200); ev("pointerup", 260, 200);
     ok(S.pts.length === n0 && S.view.cx < cx0 - 0.1, "hand: sleept de kaart zonder een punt te zetten");
