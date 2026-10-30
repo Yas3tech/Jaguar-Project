@@ -10,6 +10,8 @@ Starten doe je altijd vanuit de projectmap met `python -m jaguar.<map>.<bestand>
 | [kalibratie/](kalibratie/README.md) | Wielstraal en gyroschaal meten | `python -m jaguar.kalibratie.kalibreer 2.97` |
 | [navigatie/](navigatie/README.md) | GPS-coördinaten omrekenen, het noorden vinden, een route van coördinaten rijden | `python -m jaguar.rijden.gps_route` |
 | [live/](live/README.md) | De webpagina waarmee je tijdens het rijden meekijkt | start vanzelf bij elk rijscript |
-| [testen/](testen/README.md) | Nep-robot om zonder robot te testen | `python -m jaguar.testen.nep_robot` |
+| [camera/](camera/README.md) | Camerabeeld en obstakels zien (standaard uit) | aan in Opties op de live pagina |
+| [testen/](testen/README.md) | Nep-robot en gesimuleerde robot om zonder robot te testen | `python -m jaguar.testen.sim_robot` |
 
-Afhankelijkheden: `rijden`, `kalibratie` en `live` gebruiken `kern`; `kern` gebruikt de constanten uit `analyse/rit.py`.
+Afhankelijkheden: `rijden`, `kalibratie` en `live` gebruiken `kern`; `kern` gebruikt de constanten uit `analyse/rit.py`
+en, als Obstakels aan staat, `camera`.

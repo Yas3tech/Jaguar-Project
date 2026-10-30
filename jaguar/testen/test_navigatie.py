@@ -5,8 +5,8 @@ import math
 import random
 from pathlib import Path
 
-from jaguar.navigatie.gps import (GpsAnker, Lokaal, NoordPeiling, afstand_richting, checksum_ok, hoek180, parse_rmc,
-                                  robot_naar_enu)
+from jaguar.navigatie.gps import (GpsAnker, GpsKwaliteit, Lokaal, NoordPeiling, afstand_richting, checksum_ok, hoek180,
+                                  parse_rmc, robot_naar_enu)
 from jaguar.navigatie.route import route_naar_stappen
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -106,6 +106,44 @@ def test_anker_binnen_ritten():
         gevonden += 1
         assert not anker.betrouwbaar, (f, anker.geaccepteerd, anker.geweigerd)
     print(f"  ({gevonden} ritten met binnen-GPS gecontroleerd)")
+
+
+def test_kwaliteit_stilstaand():
+    """Open hemel (0,6 m ruis) = goed; een positie die 20 m per minuut wegloopt = slecht; geen fix = slecht."""
+    random.seed(3)
+    lok = Lokaal(50.84, 4.32)
+    for ruis, wegloop, verwacht in ((0.6, 0.0, "goed"), (2.5, 3.0, "matig"), (2.0, 20.0, "slecht")):
+        q = GpsKwaliteit()
+        for k in range(5 * 70):                   # 70 s bij 5 Hz
+            t = k / 5
+            lat, lon = lok.naar_ll(random.gauss(0, ruis) + wegloop * t / 60, random.gauss(0, ruis))
+            q.voeg_toe(t, {"fix": True, "lat": lat, "lon": lon, "v": 0.0, "cog": None})
+            if t < GpsKwaliteit.MIN_S - 1:
+                assert q.rapport(t)["oordeel"] == "wachten"
+        r = q.rapport(t)
+        assert r["oordeel"] == verwacht, (ruis, wegloop, r)
+    q = GpsKwaliteit()
+    for k in range(5 * 40):
+        q.voeg_toe(k / 5, None)                   # GPRMC zonder positie
+    assert q.rapport(40.0)["oordeel"] == "slecht"
+    assert q.rapport(45.0)["oordeel"] == "geen"   # al 5 s niets meer ontvangen
+    assert GpsKwaliteit().rapport(0.0)["oordeel"] == "geen"
+
+
+def test_kwaliteit_binnen_ritten():
+    """De binnenritten van 22/10 mogen (bijna) nooit "goed" heten. Slaat over als de ritten er niet zijn."""
+    goed = totaal = 0
+    for f in sorted(glob.glob(str(ROOT / "ritten" / "rit_20261022_12*_parcours.csv"))):
+        q = GpsKwaliteit()
+        for r in list(csv.reader(open(f, encoding="utf-8")))[1:]:
+            if r[3].startswith("$GPRMC") and checksum_ok(r[3]):
+                q.voeg_toe(float(r[0]), parse_rmc(r[3]))
+                o = q.rapport(float(r[0]))["oordeel"]
+                if o != "wachten":
+                    totaal += 1
+                    goed += o == "goed"
+    assert goed <= 0.02 * totaal, (goed, totaal)
+    print(f"  ({totaal} oordelen op binnenritten, {goed} keer goed)")
 
 
 def main():

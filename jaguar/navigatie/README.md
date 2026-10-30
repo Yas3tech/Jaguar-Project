@@ -1,6 +1,6 @@
 # navigatie/ — GPS-coördinaten en het noorden
 
-- `gps.py`: GPRMC lezen (met controlesom), coördinaten ↔ meters (oost, noord) rond een startpunt, het noorden uit de koers over de grond (`NoordPeiling`) en `GpsAnker`, dat de absolute positie bijhoudt maar slechte GPS weigert.
+- `gps.py`: GPRMC lezen (met controlesom), coördinaten ↔ meters (oost, noord) rond een startpunt, het noorden uit de koers over de grond (`NoordPeiling`) en `GpsAnker`, dat de absolute positie bijhoudt maar slechte GPS weigert. `GpsKwaliteit` zegt hoe goed de GPS op een plek is, uit de spreiding en de wegloop van de positie bij een stilstaand robot (knop GPS meten in de ontwerper).
 - `route.py`: een lijst GPS-punten omzetten naar parcoursstappen (draaien en rechtdoor).
 
 Het rijden zelf gebeurt met `python -m jaguar.rijden.gps_route` (zie die map). Controle zonder robot: `python -m jaguar.testen.test_navigatie`.

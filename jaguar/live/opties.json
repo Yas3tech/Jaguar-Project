@@ -1,4 +1,7 @@
 {
+  "camera": true,
+  "camera_resolutie": "640x480",
+  "camera_fps": 10,
   "auto_analyse": false,
   "panelen": {
     "koers": true,
@@ -7,5 +10,7 @@
     "pitchroll": true,
     "gyro": true,
     "versnelling": true
-  }
+  },
+  "obstakel": false,
+  "obstakel_stop_m": 0.4
 }

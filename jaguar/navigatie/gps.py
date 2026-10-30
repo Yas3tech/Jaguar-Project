@@ -20,6 +20,9 @@ V_MIN_COG = 1.0           # m/s: onder deze snelheid is de koers over de grond o
 GATE_M = 2.5              # m: verschil tussen GPS-verplaatsing en wielverplaatsing (over 6 tot 10 s) waarboven de GPS wordt genegeerd
 DRIFT_MAX = 5.0           # m: zoveel mag het verschil GPS − odometrie in een minuut veranderen voor de GPS betrouwbaar heet
 KP_ANKER = 0.1            # deel van het resterende verschil dat per geldige GPS-meting wordt bijgetrokken (Dr Robot: 0,5)
+# Ontvangst op deze plek, met een stilstaand robot (GpsKwaliteit): spreiding (95 %) en wegloop over 60 s
+GOED_SPREIDING, GOED_WEGLOOP = 3.0, 2.0      # m
+MATIG_SPREIDING, MATIG_WEGLOOP = 8.0, 5.0    # m
 
 
 def checksum_ok(zin):
@@ -196,3 +199,70 @@ class GpsAnker:
         dat de laatste minuut niet meer dan DRIFT_MAX is weggelopen."""
         totaal = self.geaccepteerd + self.geweigerd
         return self.geaccepteerd >= 20 and self.geaccepteerd >= 0.6 * totaal and self.drift <= DRIFT_MAX
+
+
+class GpsKwaliteit:
+    """Hoe goed de GPS op deze plek is, gemeten met een stilstaand robot.
+
+    De controller geeft geen HDOP of aantal satellieten door, en "A" (fix) zegt niets (zie boven). Wat wel
+    werkt: een robot dat stilstaat hoort steeds dezelfde positie te krijgen. Over de laatste 60 s:
+      - spreiding: 95 % van de posities ligt zo dicht bij hun gemiddelde (het springen van de positie);
+      - wegloop: hoe ver het gemiddelde van de eerste 10 s ligt van dat van de laatste 10 s (binnen en tussen
+        gebouwen dwaalt de positie langzaam weg: gemeten 20 tot 50 m in twee minuten).
+    Met 30 s zagen de binnenritten van 22/10 er soms goed uit; met 60 s bijna nooit.
+    Een kleine spreiding betekent een rustige ontvangst, niet dat de positie juist is: weerkaatsing tegen een
+    gebouw kan een vaste fout van enkele meters geven."""
+
+    VENSTER_S = 60.0
+    MIN_S = 30.0              # zo lang meten voor er een oordeel komt
+    RAND_S = 10.0             # begin en einde van het venster voor de wegloop
+    STIL_S = 3.0              # zo lang geen GPRMC = geen GPS-gegevens
+    PUNTEN = 150              # posities in het rapport (voor de kaart)
+
+    def __init__(self, t0=None):
+        self.t0 = t0                 # begin van de meting: de eerste seconden zonder zinnen = nog verbinden
+        self.metingen = deque()      # (t, gps-dict of None): None = GPRMC zonder bruikbare positie
+
+    def voeg_toe(self, t, gps):
+        """t in seconden (monotone klok), gps van parse_rmc of None voor een zin zonder positie."""
+        self.metingen.append((t, gps))
+        while t - self.metingen[0][0] > self.VENSTER_S:
+            self.metingen.popleft()
+
+    def rapport(self, t):
+        """dict met oordeel ("wachten", "geen", "goed", "matig", "slecht"), uitleg en de cijfers."""
+        m = list(self.metingen)
+        if not m and self.t0 is not None and t - self.t0 <= self.STIL_S:
+            return {"oordeel": "wachten", "uitleg": "Verbinden met het robot…"}
+        if not m or t - m[-1][0] > self.STIL_S:
+            return {"oordeel": "geen", "uitleg": "Geen GPS-gegevens van het robot. Is de GPS aangesloten en aan?"}
+        duur = m[-1][0] - m[0][0]
+        fix = [(tm, g) for tm, g in m if g and g["fix"]]
+        r = {"metingen": len(m), "duur": round(duur, 1), "hz": round((len(m) - 1) / duur, 1) if duur > 0 else None,
+             "fix": round(len(fix) / len(m), 2)}
+        if duur < self.MIN_S:
+            return dict(r, oordeel="wachten", uitleg=f"Meten… nog {math.ceil(self.MIN_S - duur)} s. Laat het robot stilstaan.")
+        if len(fix) < 0.8 * len(m):
+            return dict(r, oordeel="slecht", uitleg="Geen vaste positie (fix): de ontvanger ziet te weinig satellieten.")
+        lat = sum(g["lat"] for _, g in fix) / len(fix)
+        lon = sum(g["lon"] for _, g in fix) / len(fix)
+        lok = Lokaal(lat, lon)
+        xy = [lok.naar_xy(g["lat"], g["lon"]) for _, g in fix]
+        afst = sorted(math.hypot(x, y) for x, y in xy)
+        spreiding = afst[min(len(afst) - 1, int(0.95 * len(afst)))]
+        gem = lambda pts: (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+        begin = gem([p for (tm, _), p in zip(fix, xy) if tm - fix[0][0] <= self.RAND_S])
+        einde = gem([p for (tm, _), p in zip(fix, xy) if fix[-1][0] - tm <= self.RAND_S])
+        wegloop = math.hypot(einde[0] - begin[0], einde[1] - begin[1])
+        stap = max(1, len(fix) // self.PUNTEN)
+        r.update(spreiding=round(spreiding, 1), wegloop=round(wegloop, 1), lat=round(lat, 7), lon=round(lon, 7),
+                 punten=[[round(g["lat"], 7), round(g["lon"], 7)] for _, g in fix[::stap]])
+        if spreiding <= GOED_SPREIDING and wegloop <= GOED_WEGLOOP:
+            return dict(r, oordeel="goed", uitleg=f"Goed: de positie blijft binnen {spreiding:.1f} m. "
+                        "Bruikbaar voor het noorden bij de start en de positie op de kaart.")
+        if spreiding <= MATIG_SPREIDING and wegloop <= MATIG_WEGLOOP:
+            return dict(r, oordeel="matig", uitleg=f"Matig: de positie springt tot {spreiding:.1f} m. Alleen een ruwe "
+                        "positie; zoek een plek verder van gebouwen en bomen, of geef de richting bij de start zelf op.")
+        return dict(r, oordeel="slecht", uitleg=f"Slecht: de positie springt tot {spreiding:.0f} m en dwaalt {wegloop:.0f} m weg "
+                    "terwijl het robot stilstaat (binnen, of tussen gebouwen of bomen). Gebruik de GPS hier niet; "
+                    "de route zelf rijdt op de wielen en de gyro.")

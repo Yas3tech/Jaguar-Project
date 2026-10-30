@@ -19,6 +19,7 @@ import socket
 import statistics as st
 import threading
 import time
+import urllib.request
 import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,8 +33,14 @@ PAGE = HERE / "pagina.html"
 DESIGNER = HERE / "ontwerp.html"
 DASHBOARD = ROOT / "dashboard" / "dashboard.html"   # geschreven door rit.py
 OPTIONS_FILE = HERE / "opties.json"   # bewaard tussen de ritten
+# Axis-camera op de robot (docs/robot/Notes.txt); vraagt Digest-login, dus de server stuurt het beeld door.
+CAMERA_HOST = "192.168.0.65:8081"
+CAMERA_USER, CAMERA_PASSWORD = "root", "drrobot"
+CAMERA_RESOLUTIONS = ("320x240", "640x480", "800x600", "1280x960")
 PANELS = ("koers", "baan", "snelheid", "pitchroll", "gyro", "versnelling")
-DEFAULT_OPTIONS = {"auto_analyse": False, "panelen": {p: True for p in PANELS}}
+DEFAULT_OPTIONS = {"camera": False, "camera_resolutie": "640x480", "camera_fps": 10,
+                   "auto_analyse": False, "panelen": {p: True for p in PANELS},
+                   "obstakel": False, "obstakel_stop_m": 0.4}   # jaguar/camera/obstakel.py: vooruit stoppen voor wat de camera ziet
 IMU_DT = 0.02             # IMU stuurt 50 Hz
 SPEED_CYCLES = 3          # encodersnelheid over 3 pollcycli (~0.6 s)
 ANGLE_ALPHA = 0.1         # laagdoorlaat pitch/roll (~0.2 s bij 50 Hz)
@@ -238,9 +245,17 @@ def clean_options(raw):
     o = json.loads(json.dumps(DEFAULT_OPTIONS))
     if not isinstance(raw, dict):
         return o
-    for key in ("auto_analyse",):
+    for key in ("camera", "auto_analyse", "obstakel"):
         if isinstance(raw.get(key), bool):
             o[key] = raw[key]
+    if raw.get("camera_resolutie") in CAMERA_RESOLUTIONS:
+        o["camera_resolutie"] = raw["camera_resolutie"]
+    fps = raw.get("camera_fps")
+    if isinstance(fps, int) and not isinstance(fps, bool) and 1 <= fps <= 30:
+        o["camera_fps"] = fps
+    stop = raw.get("obstakel_stop_m")
+    if isinstance(stop, (int, float)) and not isinstance(stop, bool) and 0.25 <= stop <= 2.0:
+        o["obstakel_stop_m"] = float(stop)
     panels = raw.get("panelen")
     if isinstance(panels, dict):
         for p in PANELS:
@@ -260,10 +275,50 @@ def save_options(raw):
     global OPTIONS
     OPTIONS = clean_options(raw)
     OPTIONS_FILE.write_text(json.dumps(OPTIONS, indent=2), encoding="utf-8")
+    det = _detector()
+    if det is not None:
+        det.stop_m = OPTIONS["obstakel_stop_m"]
     return OPTIONS
 
 
+def _detector():
+    """obstakel.Detector als die in dit proces draait (zonder OpenCV te laden als dat niet zo is)."""
+    import sys
+    current = getattr(sys.modules.get("jaguar.camera.obstakel"), "current", None)   # nog aan het laden: geen detector
+    return current() if current else None
+
+
+def _obstakel_module():
+    """jaguar.camera.obstakel, of None zonder OpenCV."""
+    try:
+        from jaguar.camera import obstakel
+    except ImportError:
+        return None
+    return obstakel
+
+
 OPTIONS = load_options()
+
+
+def camera_status():
+    """Is de camera bereikbaar? Alleen een TCP-verbinding (≤ 1,5 s), geen beeld."""
+    host, port = CAMERA_HOST.split(":")
+    try:
+        socket.create_connection((host, int(port)), timeout=1.5).close()
+        return {"bereikbaar": True}
+    except OSError as e:
+        return {"bereikbaar": False, "fout": f"camera niet bereikbaar op {CAMERA_HOST} ({e.strerror or e}): "
+                                               "staat het robot aan en is deze laptop op de DriJaguar-wifi?"}
+
+
+def open_camera(resolution, fps=None):
+    """MJPEG-stroom van de Axis-camera (Digest-login); fps=None: één JPEG-beeld."""
+    url = (f"http://{CAMERA_HOST}/axis-cgi/mjpg/video.cgi?resolution={resolution}&fps={fps}&compression=30" if fps
+           else f"http://{CAMERA_HOST}/axis-cgi/jpg/image.cgi?resolution={resolution}")
+    passwords = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    passwords.add_password(None, f"http://{CAMERA_HOST}/", CAMERA_USER, CAMERA_PASSWORD)
+    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(passwords))
+    return opener.open(url, timeout=4)
 
 
 class Hub:
@@ -288,8 +343,27 @@ def _handler(hub):
             path = self.path.split("?", 1)[0]
             if path == "/stream":
                 return self._stream()
+            if path == "/camera":
+                return self._camera()
+            if path == "/camera/status":   # de pagina vraagt dit eerst: geen mislukte beelden (rode fouten) als de camera weg is
+                return self._json(200, camera_status())
             if path == "/options.json":
                 return self._json(200, OPTIONS)
+            if path == "/camera.jpg":      # één beeld, voor de kalibratie
+                try:
+                    with open_camera("640x480") as resp:
+                        return self._send(200, "image/jpeg", resp.read())
+                except OSError as e:
+                    return self.send_error(502, f"Camera niet bereikbaar op {CAMERA_HOST}: {e}")
+            if path == "/kalibratie":
+                mod = _obstakel_module()
+                if mod is None:
+                    return self._json(200, {"punten": [], "model": None, "fout": "OpenCV ontbreekt: pip install opencv-python numpy"})
+                return self._json(200, mod.load_calibration())
+            if path == "/gps.json":
+                if hub.control is None:
+                    return self._json(404, {"fout": "De GPS meten kan alleen met python -m jaguar.rijden.bediening."})
+                return self._json(200, hub.control.gps_rapport())
             if path == "/dashboard":
                 if not DASHBOARD.exists():
                     return self.send_error(404, "Nog geen dashboard: klik eerst op Analyse.")
@@ -305,9 +379,13 @@ def _handler(hub):
                 if hub.control is None:
                     return self._json(404, {"fout": "Deze pagina bestuurt de robot niet."})
                 return self._json(*hub.control.stop())     # STOP mag iedereen die meekijkt
-            if self.path not in ("/options", "/rit"):
+            if self.path == "/pauze" and hub.control is not None and not self._local():
+                # Pauzeren mag iedereen die meekijkt (zoals STOP: het robot staat dan stil); hervatten niet.
+                return self._json(*hub.control.pauze({"aan": True}))
+            if self.path not in ("/options", "/rit", "/gps", "/kalibratie", "/kalibratie/wissen",
+                                 "/pauze", "/terug", "/handmatig", "/stuur"):
                 return self.send_error(404)
-            if not self._local():   # opties en ritten starten bepalen hoe veilig de robot rijdt
+            if not self._local():   # opties, kalibratie en ritten starten bepalen hoe veilig de robot rijdt
                 return self._json(403, {"fout": "Dit kan alleen op de laptop die met de robot verbonden is."})
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -316,12 +394,39 @@ def _handler(hub):
                 return self._json(400, {"fout": "geen geldige JSON"})
             if self.path == "/options":
                 return self._json(200, save_options(raw))
+            if self.path.startswith("/kalibratie"):
+                return self._json(*kalibratie(self.path, raw))
             if hub.control is None:
-                return self._json(404, {"fout": "Ritten starten kan alleen met python -m jaguar.rijden.bediening."})
-            return self._json(*hub.control.start(raw))
+                return self._json(404, {"fout": "Ritten starten en de GPS meten kan alleen met python -m jaguar.rijden.bediening."})
+            acties = {"/gps": hub.control.gps, "/pauze": hub.control.pauze, "/terug": hub.control.terug,
+                      "/handmatig": hub.control.handmatig, "/stuur": hub.control.stuur, "/rit": hub.control.start}
+            return self._json(*acties[self.path](raw))
 
         def _json(self, code, answer):
             self._send(code, "application/json", json.dumps(answer).encode())
+
+        def _camera(self):
+            """MJPEG van de Axis-camera doorsturen (met de login), tot de browser sluit of de camera uit gaat."""
+            if not OPTIONS["camera"]:
+                return self.send_error(404, "Camera staat uit (zie /options).")
+            try:
+                resp = open_camera(OPTIONS["camera_resolutie"], OPTIONS["camera_fps"])
+            except OSError as e:
+                return self.send_error(502, f"Camera niet bereikbaar op {CAMERA_HOST}: {e}")
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", resp.headers.get("Content-Type", "multipart/x-mixed-replace"))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                while OPTIONS["camera"]:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except OSError:
+                pass      # browser gesloten of camera weg
+            finally:
+                resp.close()
 
         def _send(self, code, ctype, body):
             self.send_response(code)
@@ -347,7 +452,9 @@ def _handler(hub):
                     msg = view.message(sent)
                     msg["rijen"] = msg["rijen"][:n - sent]
                     if hub.control is not None:
-                        msg["bediening"] = dict(hub.control.state, mag_starten=local)
+                        msg["bediening"] = dict(hub.control.toestand(), mag_starten=local)
+                    det = _detector()
+                    msg["obstakel"] = det.info() if det is not None else None
                     self.wfile.write(f"data: {json.dumps(msg, separators=(',', ':'))}\n\n".encode())
                     self.wfile.flush()
                     sent = n
@@ -355,6 +462,24 @@ def _handler(hub):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
     return Handler
+
+
+def kalibratie(path, raw):
+    """POST /kalibratie {rij, afstand} (een punt erbij) of /kalibratie/wissen; geeft (HTTP-status, antwoord)."""
+    mod = _obstakel_module()
+    if mod is None:
+        return 500, {"fout": "OpenCV ontbreekt: pip install opencv-python numpy"}
+    if path == "/kalibratie/wissen":
+        cal = mod.clear_calibration()
+    else:
+        try:
+            cal = mod.save_point(float(raw["rij"]), float(raw["afstand"]))
+        except (KeyError, TypeError, ValueError):
+            return 400, {"fout": "rij en afstand nodig"}
+    det = mod.current()
+    if det is not None:
+        det.model = cal.get("model")
+    return 200, cal
 
 
 def lan_addresses():

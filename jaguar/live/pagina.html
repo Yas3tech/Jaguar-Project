@@ -45,7 +45,8 @@ canvas { width: 100%; height: 190px; display: block; }
 canvas.square { height: 260px; }
 .note { font-size: 12px; color: var(--ink-3); margin: 0; }
 /* Analyse: knop in de kop, dashboard in een venster boven de live pagina */
-.actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.sub { overflow-wrap: anywhere; min-width: 0; }
 .btn { font: inherit; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--s1); background: var(--s1); color: #fff; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
@@ -72,7 +73,7 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 .opt-body .field { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 10px; }
 .opt-body select { font: inherit; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); max-width: 180px; }
 .opt-body fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
-.opt-body fieldset:disabled { opacity: .5; }
+.opt-body fieldset:disabled, .opt-body select:disabled { opacity: .5; }
 .opt-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 14px; }
 /* Rijden */
 #dlg-rit { width: min(600px, 96vw); max-height: 92vh; }
@@ -93,6 +94,58 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 #opt-state { font-size: 12px; color: var(--ink-3); }
 #opt-state.ok { color: var(--good); } #opt-state.bad { color: var(--bad); }
 .panel[hidden] { display: none; }
+#a-msg.info { color: var(--ink-2); }
+.btn.warn { background: var(--warn); border-color: var(--warn); color: #fff; }
+/* Handmatig rijden */
+#hand { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px;
+  display: grid; grid-template-columns: auto 1fr; gap: 10px 22px; align-items: center; }
+#hand[hidden] { display: none; }
+#hand h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--ink-2); grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; }
+#hand h2 .btn { margin-left: auto; }
+.pad { display: grid; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(2, 48px); gap: 6px; touch-action: none; user-select: none; }
+.pad button { font: 600 20px var(--f-body); border: 1px solid var(--rule); border-radius: 6px; background: var(--chip); color: var(--ink); cursor: pointer; touch-action: none; }
+.pad button.on { background: var(--s1); border-color: var(--s1); color: #fff; }
+.pad button:disabled { opacity: .45; cursor: default; }
+.pad [data-pad="vooruit"] { grid-column: 2; grid-row: 1; }
+.pad [data-pad="links"] { grid-column: 1; grid-row: 2; }
+.pad [data-pad="achteruit"] { grid-column: 2; grid-row: 2; }
+.pad [data-pad="rechts"] { grid-column: 3; grid-row: 2; }
+.hand-info { display: grid; gap: 8px; min-width: 0; }
+.hand-info .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.hand-info input[type=range] { width: 200px; accent-color: var(--s1); }
+.meter { width: 140px; height: 8px; border-radius: 4px; background: var(--chip); position: relative; overflow: hidden; }
+.meter i { position: absolute; top: 0; bottom: 0; left: 50%; background: var(--s1); }
+/* Camera */
+.cam { position: relative; aspect-ratio: 4 / 3; background: #0b0d0c; border-radius: 4px; overflow: hidden; }
+.cam img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cam span { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; color: #c9d1cd; font-size: 13px; }
+.cam span:empty { display: none; }
+/* Obstakeldetectie: lijn waar de vloer ophoudt (middelste strook = weg van de robot) */
+.edge { position: absolute; left: 38%; width: 24%; border-top: 3px solid var(--good); pointer-events: none; }
+.prof { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.prof polyline { fill: none; stroke: #ffd400; stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .85; }
+.edge.warn { border-color: var(--warn); } .edge.bad { border-color: var(--bad); }
+.edge b { position: absolute; left: 0; bottom: 4px; white-space: nowrap; font: 600 12px var(--f-data); color: #fff;
+  background: rgb(0 0 0 / .6); padding: 1px 6px; border-radius: 3px; }
+#dlg-kal { width: min(720px, 96vw); max-height: 94vh; }
+/* beeld niet hoger dan ~55 % van het venster: knoppen en lijst blijven zichtbaar zonder scrollen */
+.kal-img { position: relative; cursor: crosshair; background: #0b0d0c; aspect-ratio: 4 / 3; border-radius: 4px; overflow: hidden;
+  width: min(100%, 55vh * 4 / 3); margin: 0 auto; }
+.kal-img img { width: 100%; height: 100%; display: block; }
+.kal-img .edge { border-color: var(--bad); }
+.kal-img .auto { border-top-style: dashed; border-color: #fff; }
+.kal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kal-row input { font: inherit; width: 70px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); }
+@media (max-width: 760px) {      /* telefoon: knoppen op een eigen rij, alles binnen de breedte van het scherm */
+  .wrap { padding: 10px; }
+  .actions { margin-left: 0; width: 100%; }
+  #a-msg { flex-basis: 100%; order: 9; }
+  .tile .v { font-size: 20px; }
+  #hand { grid-template-columns: 1fr; }
+  #hand h2 { flex-wrap: wrap; }
+  .pad { justify-self: center; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(2, 60px); }
+  .hand-info input[type=range] { width: 100%; }
+}
 </style>
 </head>
 <body>
@@ -103,8 +156,11 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
     <span id="name" class="sub"></span>
     <div class="actions">
       <span id="a-msg" role="status"></span>
+      <button id="b-pauze" class="btn warn" hidden title="Het robot stopt; Hervatten rijdt dezelfde stap verder (P)">Pauze</button>
+      <button id="b-terug" class="btn ghost" hidden title="Parcours afbreken en in een rechte lijn terug naar de start">Terug naar start</button>
       <button id="b-stop" class="btn stop" hidden title="Motoren 0 en E-Stop aan (spatiebalk)">STOP</button>
       <button id="b-rit" class="btn" hidden>Rijden</button>
+      <button id="b-hand" class="btn ghost" hidden>Handmatig</button>
       <button id="b-opt" class="btn ghost">Opties</button>
       <button id="b-dash" class="btn ghost" hidden>Dashboard openen</button>
       <button id="b-analyse" class="btn" disabled>Analyse</button>
@@ -158,6 +214,27 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
     </div>
   </dialog>
 
+  <dialog id="dlg-kal" aria-labelledby="kal-title">
+    <div class="dlg-head">
+      <h2 id="kal-title">Camera kalibreren</h2>
+      <button id="b-kal-close" class="btn ghost">Sluiten</button>
+    </div>
+    <div class="opt-body">
+      <p class="note">Eén keer nodig (zolang de camera niet verschuift). Zet de robot recht voor een muur, op 1 m van de voorkant van de robot.
+        Klik in het beeld op de voet van de muur, in het midden (de witte stippellijn is wat de robot zelf ziet), vul de afstand in en klik op Punt bewaren.
+        Herhaal op 2 m en liefst ook op 3 m.</p>
+      <div class="kal-row">
+        <label for="kal-d">Afstand tot de muur</label><input id="kal-d" type="number" min="0.3" max="10" step="0.1" value="1"> m
+        <button id="b-kal-save" class="btn" disabled>Punt bewaren</button>
+        <button id="b-kal-new" class="btn ghost">Nieuw beeld</button>
+        <span class="note" id="kal-msg" role="status"></span>
+      </div>
+      <div class="kal-img" id="kal-img"><img id="kal-pic" alt="Camerabeeld om de voet van de muur aan te klikken">
+        <div id="kal-auto" class="edge auto" hidden></div><div id="kal-mark" class="edge" hidden></div></div>
+      <div class="kal-row"><span class="note" id="kal-list"></span><button id="b-kal-clear" class="btn ghost">Alles wissen</button></div>
+    </div>
+  </dialog>
+
   <dialog id="dlg-opt" aria-labelledby="opt-title">
     <div class="dlg-head">
       <h2 id="opt-title">Opties</h2>
@@ -165,6 +242,26 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
       <button id="b-opt-close" class="btn ghost">Sluiten</button>
     </div>
     <div class="opt-body">
+      <section>
+        <h3>Camera</h3>
+        <label class="row"><input type="checkbox" id="o-camera"> Live camerabeeld tonen</label>
+        <fieldset id="o-cam-set">
+          <div class="field"><label for="o-res">Resolutie</label>
+            <select id="o-res"><option>320x240</option><option>640x480</option><option>800x600</option><option>1280x960</option></select></div>
+          <div class="field"><label for="o-fps">Beelden per seconde</label>
+            <select id="o-fps"><option>2</option><option>5</option><option>10</option><option>15</option><option>25</option></select></div>
+        </fieldset>
+        <p class="note">Het camerabeeld gaat over dezelfde wifi als de robotgegevens. Komen de metingen haperend binnen, kies dan minder beelden per seconde of zet de camera uit.</p>
+      </section>
+      <section>
+        <h3>Obstakels (camera)</h3>
+        <label class="row"><input type="checkbox" id="o-obst"> Vooruit stoppen voor wat de camera ziet</label>
+        <div class="field"><label for="o-stop">Stoppen op</label>
+          <select id="o-stop"><option value="0.3">0,3 m</option><option value="0.4">0,4 m (aanbevolen)</option><option value="0.5">0,5 m</option><option value="0.6">0,6 m</option><option value="0.8">0,8 m</option><option value="1">1,0 m</option></select></div>
+        <div class="kal-row"><span class="note" id="o-kal-state"></span><button id="b-kal" class="btn ghost">Kalibreren…</button></div>
+        <p class="note">Geldt vanaf de volgende rit. Ter plaatse draaien vraagt 11 cm voor de voorkant (de hoeken draaien rond); de rest is marge. De robot stopt nooit dichter dan waar de camera de vloer nog ziet.</p>
+        <p class="note">Bij een obstakel wacht de robot even (iemand loopt weg), rijdt eromheen als er naast vrije vloer is, of eindigt de stap aan de muur; daarna gaat het parcours verder. Handmatig: vooruit is dan geblokkeerd, draaien en achteruit niet. Alleen vooruit; achteruit is hij blind. Werkt niet bij glas, een muur in de kleur van de vloer of in het donker: de noodstop blijft nodig.</p>
+      </section>
       <section>
         <h3>Grafieken</h3>
         <div class="opt-panels">
@@ -184,6 +281,24 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
     </div>
   </dialog>
 
+  <section id="hand" hidden aria-labelledby="hand-title">
+    <h2><span id="hand-title">Handmatig rijden</span><span id="hand-state" class="chip wait"><i></i>niet verbonden</span>
+      <button id="b-hand-go" class="btn">Verbinden en rijden</button><button id="b-hand-close" class="btn ghost">Sluiten</button></h2>
+    <div class="pad" aria-label="Rijknoppen">
+      <button data-pad="vooruit" aria-label="Vooruit">▲</button><button data-pad="links" aria-label="Links draaien">◀</button>
+      <button data-pad="achteruit" aria-label="Achteruit">▼</button><button data-pad="rechts" aria-label="Rechts draaien">▶</button>
+    </div>
+    <div class="hand-info">
+      <div class="row"><label for="h-max">Vermogen</label><input id="h-max" type="range" min="50" max="600" step="10" value="250">
+        <span id="h-max-v" class="sub"></span></div>
+      <div class="row"><span class="sub">rijden</span><span class="meter"><i id="h-v"></i></span>
+        <span class="sub">draaien</span><span class="meter"><i id="h-w"></i></span><span id="h-gp" class="sub">geen gamepad</span></div>
+      <p class="note">Pijltjes of WASD, de knoppen hiernaast (ingedrukt houden) of een gamepad (linkerstick; B = STOP). Loslaten = stoppen.
+        Krijgt het robot 0,4 s niets van deze pagina (tabblad weg, wifi weg), dan staat het stil. Rechtdoor houdt de gyro de koers vast.
+        Spatiebalk = STOP. Na een veiligheidsstop (kantelen, vastgelopen) eerst alles loslaten.</p>
+    </div>
+  </section>
+
   <div class="tiles">
     <div class="tile"><div class="k">Fase</div><div class="v" id="v-fase">–</div><div class="n" id="n-tijd">t = –</div></div>
     <div class="tile"><div class="k">Motoropdracht</div><div class="v" id="v-pwr">–</div><div class="n">van ±1000, open-loop</div></div>
@@ -191,13 +306,16 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
     <div class="tile"><div class="k">Afstand</div><div class="v" id="v-s">–</div><div class="n" id="n-xy">x – · y –</div></div>
     <div class="tile"><div class="k">Koers gyro</div><div class="v" id="v-h">–</div><div class="n" id="n-he">encoders –</div></div>
     <div class="tile"><div class="k">Pitch / roll</div><div class="v" id="v-pr">–</div><div class="n">accelerometer, gefilterd</div></div>
-    <div class="tile"><div class="k">Batterij</div><div class="v" id="v-bat">–</div><div class="n">stop onder 22,2 V</div></div>
+    <div class="tile"><div class="k">Batterij</div><div class="v" id="v-bat">–</div><div class="n">start ≥ 22,2 V · terug &lt; 21,6 V</div></div>
     <div class="tile"><div class="k">Stroom / temp</div><div class="v" id="v-a">–</div><div class="n" id="n-t">temp –</div></div>
     <div class="tile"><div class="k">E-Stop</div><div class="v" id="v-es">–</div><div class="n" id="n-ff">FF –</div></div>
     <div class="tile"><div class="k">IMU</div><div class="v" id="v-hz">–</div><div class="n" id="n-bias">bias –</div></div>
   </div>
 
   <div class="grid">
+    <div class="panel" data-panel="camera" hidden><h2>Camera</h2>
+      <div class="cam"><img id="cam" alt="Live beeld van de robotcamera"><svg id="cam-prof" class="prof" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline/></svg><div id="cam-edge" class="edge" hidden><b></b></div><span id="cam-msg"></span></div>
+      <p class="note" id="cam-note">Axis-camera op de robot, via deze laptop doorgestuurd.</p></div>
     <div class="panel" data-panel="koers"><h2>Koers</h2>
       <div class="legend"><span><b style="background:var(--s1)"></b>gyro (Z)</span><span><b style="background:var(--s2)"></b>encoders (rechts − links)</span></div>
       <canvas id="c-koers"></canvas></div>
@@ -232,7 +350,7 @@ const es = new EventSource("/stream");
 es.onmessage = (e) => {
   const m = JSON.parse(e.data);
   if (m.run !== run) {   // nieuwe rit (ook gestart vanaf deze pagina): grafieken en analyse opnieuw
-    run = m.run; rows = [];
+    run = m.run; rows = []; lastMelding = null;
     analysed = 0; frameSrc = null; autoDone = false; msg("");
   }
   if (m.start === rows.length) rows.push(...m.rijen);
@@ -241,8 +359,73 @@ es.onmessage = (e) => {
   setConn(status.klaar ? ["ok", "rit klaar"] : ["ok", "live"]);
   applyOptions(m.opties);
   analyseState(m);
+  if (status.melding_n && status.melding_n !== lastMelding) { lastMelding = status.melding_n; msg(status.melding, false, true); }
   controlState(m.bediening);
+  obstacleState(m.obstakel);
   dirty = true;
+};
+
+let lastMelding = null;   // bericht van het rijscript (pauze, terug, obstakel, omweg, batterij)
+
+// Obstakeldetectie (jaguar/camera/obstakel.py): lijn waar de vloer ophoudt, met de afstand als de camera gekalibreerd is.
+function obstacleState(o) {
+  const e = $("cam-edge");
+  e.hidden = !o || o.rij == null || o.leeftijd == null || o.leeftijd > 2;
+  // vloerrand over de hele breedte (geel): toont ook vloer die verder doorloopt, bv. door een open deur
+  const pr = !e.hidden && o.profiel;
+  $("cam-prof").firstChild.setAttribute("points", pr ? pr.map((r, i) => `${(i + 0.5) / pr.length * 100},${r * 100}`).join(" ") : "");
+  if (!e.hidden) {
+    e.style.top = `${o.rij * 100}%`;
+    const near = o.m != null && o.m <= o.stop_m, soon = o.m != null && o.m <= o.stop_m + 1;
+    e.className = `edge${near ? " bad" : soon ? " warn" : ""}`;
+    e.firstChild.textContent = !o.gekalibreerd ? "niet gekalibreerd" : o.m == null ? "vrij" : `obstakel ${nl(o.m, 1)} m`;
+  }
+  const auto = $("kal-auto");
+  auto.hidden = e.hidden;
+  if (!e.hidden) auto.style.top = `${o.rij * 100}%`;
+}
+
+// Kalibratie: voet van de muur aanklikken op een gekende afstand (POST /kalibratie).
+let kalRow = null;
+function kalState(c) {
+  const pts = c.punten || [];
+  $("o-kal-state").textContent = c.fout ? c.fout : c.model ? `gekalibreerd (${pts.length} punten; ziet de vloer vanaf ${nl(c.model.blind_m, 2)} m)` : `nog niet gekalibreerd${pts.length ? ` (${pts.length} punt, minstens 2 nodig)` : ""}`;
+  $("kal-list").textContent = pts.length ? "Punten: " + pts.map(([r, d]) => `${nl(d, 1)} m → rij ${nl(r, 3)}`).join(" · ") : "Nog geen punten.";
+}
+function kalPicture() {
+  kalRow = null; $("kal-mark").hidden = true; $("b-kal-save").disabled = true;
+  $("kal-pic").src = `/camera.jpg?v=${Date.now()}`;
+}
+$("b-kal").onclick = async () => {
+  $("kal-msg").textContent = "";
+  try { kalState(await (await fetch("/kalibratie")).json()); } catch {}
+  kalPicture();
+  $("dlg-kal").showModal();
+};
+$("b-kal-close").onclick = () => $("dlg-kal").close();
+$("b-kal-new").onclick = kalPicture;
+$("kal-pic").onerror = () => { $("kal-msg").textContent = "Geen camerabeeld (192.168.0.65)."; };
+$("kal-img").onclick = (e) => {
+  const r = $("kal-img").getBoundingClientRect();
+  kalRow = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  $("kal-mark").hidden = false; $("kal-mark").style.top = `${kalRow * 100}%`;
+  $("b-kal-save").disabled = false;
+};
+$("b-kal-save").onclick = async () => {
+  const d = parseFloat($("kal-d").value.replace(",", "."));
+  try {
+    const r = await fetch("/kalibratie", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rij: kalRow, afstand: d }) });
+    const c = await r.json();
+    if (!r.ok) throw new Error(c.fout || `HTTP ${r.status}`);
+    kalState(c);
+    $("kal-msg").textContent = c.model ? "Bewaard. De robot rekent nu afstanden uit het beeld." : `Bewaard. Zet de robot nu op een andere afstand (bv. ${nl(d + 1, 0)} m).`;
+    $("kal-d").value = d + 1;
+    kalPicture();
+  } catch (err) { $("kal-msg").textContent = err.message; }
+};
+$("b-kal-clear").onclick = async () => {
+  if (!confirm("Alle kalibratiepunten wissen?")) return;
+  try { kalState(await (await fetch("/kalibratie/wissen", { method: "POST", body: "{}" })).json()); } catch {}
 };
 
 // Rijden vanaf de pagina (alleen met python bediening.py): parcours samenstellen, starten, STOP.
@@ -252,18 +435,125 @@ try {   // laatste parcours van deze browser
   const s = JSON.parse(localStorage.getItem("jaguar-parcours")).filter((x) => KINDS[x?.[0]] && +x[1] > 0).map(([k, v]) => [k, +v]);
   if (s.length) steps = s;
 } catch {}
+let ctl = null;   // laatste stand van bediening.py
 function controlState(b) {
-  $("b-rit").hidden = !b || !b.mag_starten || b.bezig;
-  $("b-stop").hidden = !b || !b.bezig;
-  if (b?.bezig && $("dlg-rit").open) $("dlg-rit").close();
-  if (b?.bezig && $("dlg-ontwerp").open) $("dlg-ontwerp").close();
+  ctl = b || null;
+  const bezig = !!b?.bezig, lokaal = !!b?.mag_starten, hand = bezig && b.soort === "handmatig";
+  $("b-rit").hidden = !b || !lokaal || bezig;
+  $("b-hand").hidden = !b || !lokaal || bezig || !$("hand").hidden;
+  $("b-stop").hidden = !bezig;
+  // Pauze mag iedereen die meekijkt (zoals STOP); hervatten alleen op de laptop
+  const pz = $("b-pauze");
+  pz.hidden = !bezig || hand;
+  pz.textContent = b?.gepauzeerd ? "Hervatten" : "Pauze";
+  pz.className = b?.gepauzeerd ? "btn" : "btn warn";
+  pz.disabled = !!b?.gepauzeerd && !lokaal;
+  pz.title = b?.gepauzeerd ? (lokaal ? "Verder rijden met dezelfde stap (P)" : "Hervatten kan alleen op de laptop") : "Het robot stopt; Hervatten rijdt dezelfde stap verder (P)";
+  const tg = $("b-terug");
+  tg.hidden = !lokaal || (bezig ? b.soort === "terug" : !b?.thuis);
+  tg.disabled = bezig && b.terug_gevraagd;
+  tg.textContent = !bezig && b?.thuis ? `Terug naar start (${nl(b.thuis.afstand, 1)} m)` : b?.terug_gevraagd ? "Terug naar start…" : "Terug naar start";
+  if (bezig && $("dlg-rit").open) $("dlg-rit").close();
+  if (bezig && $("dlg-ontwerp").open) $("dlg-ontwerp").close();
+  handState(b);
   const key = b && !b.bezig ? `${b.resultaat}|${b.fout}` : null;
   if (key !== lastResult) {
     lastResult = key;
     if (b?.resultaat === "gestopt") msg("rit gestopt met STOP", true);
+    else if (b?.resultaat === "obstakel") msg(`gestopt: ${b.fout}`, true);
+    else if (b?.resultaat === "batterij") msg(b.fout, true);
+    else if (b?.resultaat === "terug") msg("parcours afgebroken en terug naar de start gereden", false, true);
     else if (b?.resultaat === "fout") msg(`rit niet gelukt: ${b.fout}`, true);
   }
 }
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const a = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+  return a;
+}
+async function pauze() {
+  if (!ctl?.bezig || ctl.soort === "handmatig") return;
+  try { await post("/pauze", { aan: !ctl.gepauzeerd }); }
+  catch (e) { msg(e instanceof TypeError ? "Pauze niet aangekomen: gebruik STOP of de noodstop!" : e.message, true); }
+}
+$("b-pauze").onclick = pauze;
+$("b-terug").onclick = async () => {
+  if (!ctl) return;
+  const st = (ctl.thuis?.stappen || []).map(([k, v]) => `${k} ${nl(v, k === "vooruit" || k === "achteruit" ? 2 : 0)}${k === "vooruit" || k === "achteruit" ? " m" : "°"}`).join(", ");
+  const vraag = ctl.bezig
+    ? "Het parcours afbreken en in een rechte lijn terug naar de start rijden?\n\nIs de weg naar de start vrij?"
+    : `Terug naar de start: ${st}.\n\nRechte lijn: is de weg vrij? Klopt alleen als niemand het robot verplaatst heeft sinds de vorige rit (vóór het rijden staat het 3 s stil).`;
+  if (!confirm(vraag)) return;
+  try { await post("/terug", {}); } catch (e) { msg(e instanceof TypeError ? "geen verbinding met bediening.py" : e.message, true); }
+};
+
+// Handmatig rijden: 10 keer per seconde de stand van toetsen, knoppen en gamepad naar /stuur (dodemansknop op het robot: 0,4 s).
+const KEYS = { ArrowUp: "vooruit", KeyW: "vooruit", ArrowDown: "achteruit", KeyS: "achteruit", ArrowLeft: "links", KeyA: "links", ArrowRight: "rechts", KeyD: "rechts" };
+const down = new Set();          // ingedrukt: "vooruit", "achteruit", "links", "rechts" (toetsen en knoppen)
+let handTimer = null, handBusy = false, gpStop = false, handV = 0, handW = 0;
+const handActive = () => ctl?.bezig && ctl.soort === "handmatig";
+function handState(b) {
+  const act = handActive();
+  const c = $("hand-state");
+  c.className = "chip " + (act ? "ok" : "wait");
+  c.lastChild.textContent = act ? (status.fase === "handmatig" ? "rijden" : "rustmeting…") : b?.bezig ? "andere rit loopt" : "niet verbonden";
+  $("b-hand-go").textContent = act ? "Klaar" : "Verbinden en rijden";
+  $("b-hand-go").disabled = !b?.mag_starten || (b?.bezig && !act);
+  $("b-hand-close").hidden = act;
+  for (const k of document.querySelectorAll("[data-pad]")) k.disabled = !act;
+  if (act && !handTimer) handTimer = setInterval(sendStuur, 100);
+  if (!act && handTimer) { clearInterval(handTimer); handTimer = null; down.clear(); padShow(); }
+}
+function gamepad() {
+  const gp = [...(navigator.getGamepads?.() || [])].find((g) => g && g.connected);
+  $("h-gp").textContent = gp ? `gamepad: ${gp.id.slice(0, 28)}` : "geen gamepad";
+  if (!gp) return [0, 0];
+  if (gp.buttons[1]?.pressed) { if (!gpStop) { gpStop = true; stopRobot(); } } else gpStop = false;
+  const dz = (x) => Math.abs(x) < 0.15 ? 0 : (x - Math.sign(x) * 0.15) / 0.85;
+  const turn = Math.abs(gp.axes[2] || 0) > Math.abs(gp.axes[0] || 0) ? gp.axes[2] : gp.axes[0];   // linker- of rechterstick
+  return [-dz(gp.axes[1] || 0), -dz(turn || 0)];
+}
+function sendStuur() {
+  const [gv, gw] = gamepad();
+  const clamp = (x) => Math.max(-1, Math.min(1, x));
+  handV = clamp((down.has("vooruit") ? 1 : 0) - (down.has("achteruit") ? 1 : 0) + gv);
+  handW = clamp((down.has("links") ? 1 : 0) - (down.has("rechts") ? 1 : 0) + gw);
+  meter("h-v", handV); meter("h-w", handW);
+  if (handBusy) return;            // het vorige bericht is nog onderweg: niet opstapelen
+  handBusy = true;
+  post("/stuur", { v: handV, w: handW, max: +$("h-max").value }).catch(() => {}).finally(() => { handBusy = false; });
+}
+function meter(id, x) { const e = $(id); e.style.left = `${50 + Math.min(0, x) * 50}%`; e.style.width = `${Math.abs(x) * 50}%`; }
+function padShow() { for (const k of document.querySelectorAll("[data-pad]")) k.classList.toggle("on", down.has(k.dataset.pad)); }
+for (const k of document.querySelectorAll("[data-pad]")) {
+  const on = (e) => { e.preventDefault(); k.setPointerCapture?.(e.pointerId); down.add(k.dataset.pad); padShow(); };
+  const off = () => { down.delete(k.dataset.pad); padShow(); };
+  k.addEventListener("pointerdown", on);
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) k.addEventListener(ev, off);
+  k.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+addEventListener("keydown", (e) => {
+  if (!handActive() || !KEYS[e.code] || e.target.closest("input[type=number], input[type=text], select, textarea")) return;
+  e.preventDefault(); down.add(KEYS[e.code]); padShow();
+});
+addEventListener("keyup", (e) => { if (KEYS[e.code]) { down.delete(KEYS[e.code]); padShow(); } });
+addEventListener("blur", () => { down.clear(); padShow(); });                    // geen toets die blijft hangen
+document.addEventListener("visibilitychange", () => { if (document.hidden) { down.clear(); padShow(); } });
+$("h-max").oninput = () => { $("h-max-v").textContent = `${$("h-max").value} · ≈ ${nl($("h-max").value * 0.0031, 1)} m/s`; };
+$("h-max").onchange = () => $("h-max").blur();                                 // pijltjes sturen dan weer het robot, niet de schuif
+$("h-max").oninput();
+$("b-hand").onclick = () => { $("hand").hidden = false; $("b-hand").hidden = true; };
+$("b-hand-close").onclick = () => { $("hand").hidden = true; controlState(ctl); };
+$("b-hand-go").onclick = async () => {
+  try {
+    if (handActive()) await post("/handmatig", { aan: false });
+    else {
+      if (!confirm("Handmatig rijden: vrije ruimte rond het robot en de noodstop bij de hand?\n\nEerst staat het robot 3 s stil (rustmeting).")) return;
+      await post("/handmatig", { aan: true, max: +$("h-max").value });
+    }
+  } catch (e) { msg(e instanceof TypeError ? "geen verbinding met bediening.py" : e.message, true); }
+};
 function renderSteps() {
   $("steps").innerHTML = "";
   steps.forEach(([kind, value], i) => {
@@ -319,17 +609,41 @@ async function stopRobot() {
 }
 $("b-stop").onclick = stopRobot;
 addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !$("b-stop").hidden && !e.target.closest("input, select, textarea")) { e.preventDefault(); stopRobot(); }
+  if (e.target.closest("input[type=number], input[type=text], select, textarea")) return;
+  if (e.code === "Space" && !$("b-stop").hidden) { e.preventDefault(); stopRobot(); }
+  if (e.code === "KeyP" && !$("b-pauze").hidden && !$("b-pauze").disabled) { e.preventDefault(); pauze(); }
 });
 
-// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen.
+// Opties (pagina /options, bewaard op de server): panelen tonen of verbergen, camera aan of uit.
+let camKey = null, camRetry = null;
 function applyOptions(o) {
   if (!o) return;
   for (const p of document.querySelectorAll("[data-panel]")) {
-    const show = o.panelen[p.dataset.panel] !== false;
+    const show = p.dataset.panel === "camera" ? o.camera : o.panelen[p.dataset.panel] !== false;
     if (p.hidden === show) { p.hidden = !show; dirty = true; }
   }
+  const key = o.camera ? `${o.camera_resolutie}@${o.camera_fps}` : null;
+  if (key !== camKey) { camKey = key; camera(); }
 }
+async function camera() {
+  clearTimeout(camRetry);
+  const img = $("cam"), key = camKey;
+  if (!key) { img.removeAttribute("src"); return; }
+  $("cam-msg").textContent = "camera verbinden…";
+  // Eerst vragen of de camera bereikbaar is: een mislukt beeld geeft elke 5 s een rode fout in de console.
+  let st;
+  try { st = await (await fetch("/camera/status")).json(); } catch { st = { bereikbaar: false, fout: "geen verbinding met het script" }; }
+  if (key !== camKey) return;                    // intussen uitgezet of andere resolutie
+  if (!st.bereikbaar) { camWeg(st.fout); return; }
+  img.src = `/camera?v=${Date.now()}`;
+}
+function camWeg(reden) {
+  $("cam").removeAttribute("src");
+  $("cam-msg").textContent = `${reden || "camera niet bereikbaar (192.168.0.65)"} · opnieuw over 5 s`;
+  camRetry = setTimeout(camera, 5000);
+}
+$("cam").onload = () => { $("cam-msg").textContent = ""; };
+$("cam").onerror = () => { if (camKey && $("cam").getAttribute("src")) camWeg(); };
 es.onerror = () => {
   setConn(status.klaar ? ["ok", "rit klaar · script gestopt"] : ["bad", "geen verbinding met script"]);
   if (!busy) { $("b-analyse").disabled = true; msg(frameSrc ? "" : "script gestopt: analyse niet meer mogelijk"); }
@@ -338,7 +652,7 @@ function setConn([cls, txt]) { const c = $("conn"); c.className = "chip " + cls;
 
 // Analyse: het rijscript houdt de server na de rit open; POST /analyse draait analyse_rit.py op deze CSV.
 let busy = false, frameSrc = null, analysed = 0;
-function msg(text, bad = false) { const e = $("a-msg"); e.textContent = text; e.className = bad ? "bad" : ""; }
+function msg(text, bad = false, info = false) { const e = $("a-msg"); e.textContent = text; e.className = bad ? "bad" : info ? "info" : ""; }
 function analyseState(m) {
   if (busy) return;
   const b = $("b-analyse");
@@ -346,8 +660,8 @@ function analyseState(m) {
   b.textContent = analysed ? "Opnieuw analyseren" : "Analyse";
   $("b-dash").hidden = !m.dashboard && !frameSrc;
   if (!m.csv) { if (!m.bediening) msg("geen CSV: geen analyse"); }
-  else if (!m.csv_klaar) msg("analyse na de rit");
-  else if (!$("a-msg").classList.contains("bad")) msg("");
+  else if (!m.csv_klaar) { if (!$("a-msg").className) msg("analyse na de rit"); }   // een melding van het robot blijft staan
+  else if (!$("a-msg").classList.contains("bad") && !$("a-msg").classList.contains("info")) msg("");
   // Optie: na de rit vanzelf analyseren (één keer per rit).
   if (m.opties?.auto_analyse && m.csv && m.csv_klaar && !analysed && !autoDone) { autoDone = true; b.click(); }
 }
@@ -382,13 +696,21 @@ for (const d of document.querySelectorAll("dialog"))
 
 // Opties-venster: bewaren op de server (POST /options); /options opent de pagina met dit venster open.
 function fillOptions(o) {
+  $("o-camera").checked = o.camera;
+  $("o-res").value = o.camera_resolutie;
+  if (![...$("o-fps").options].some((x) => +x.value === o.camera_fps)) $("o-fps").add(new Option(o.camera_fps));
+  $("o-fps").value = String(o.camera_fps);
+  $("o-cam-set").disabled = !o.camera;
   $("o-auto").checked = o.auto_analyse;
+  $("o-obst").checked = o.obstakel;
+  $("o-stop").value = String(o.obstakel_stop_m);
+  $("o-stop").disabled = !o.obstakel;
   for (const c of document.querySelectorAll("[data-opt]")) c.checked = o.panelen[c.dataset.opt] !== false;
 }
 function optState(text, cls = "") { $("opt-state").textContent = text; $("opt-state").className = cls; }
 async function openOptions() {
   optState("");
-  try { fillOptions(await (await fetch("/options.json")).json()) }
+  try { fillOptions(await (await fetch("/options.json")).json()); kalState(await (await fetch("/kalibratie")).json()); }
   catch { optState("geen verbinding met het script", "bad"); }
   $("dlg-opt").showModal();
 }
@@ -397,9 +719,13 @@ $("b-opt-close").onclick = () => $("dlg-opt").close();
 $("dlg-opt").addEventListener("close", () => { if (location.pathname === "/options") history.replaceState(null, "", "/"); });
 $("dlg-opt").addEventListener("change", async () => {
   const o = {
+    camera: $("o-camera").checked, camera_resolutie: $("o-res").value, camera_fps: +$("o-fps").value,
     auto_analyse: $("o-auto").checked,
+    obstakel: $("o-obst").checked, obstakel_stop_m: +$("o-stop").value,
     panelen: Object.fromEntries([...document.querySelectorAll("[data-opt]")].map((c) => [c.dataset.opt, c.checked])),
   };
+  $("o-cam-set").disabled = !o.camera;
+  $("o-stop").disabled = !o.obstakel;
   optState("bewaren…");
   try {
     const r = await fetch("/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(o) });
@@ -429,7 +755,7 @@ function tiles() {
     $("v-hz").innerHTML = `${n > 1 ? Math.round(n / 2) : "–"}<small>Hz</small>`;
   }
   const bat = status.batterij_v;
-  $("v-bat").innerHTML = bat ? `<span class="${bat < 22.2 ? "bad" : ""}">${nl(bat, 1)}</span><small>V</small>` : "–";
+  $("v-bat").innerHTML = bat ? `<span class="${bat < 21.6 ? "bad" : bat < 22.2 ? "wait" : ""}">${nl(bat, 1)}</span><small>V</small>` : "–";
   const amps = Object.values(status.stroom_a || {}).flat();
   $("v-a").innerHTML = amps.length ? `${nl(Math.max(...amps), 1)}<small>A max</small>` : "–";
   const temps = Object.values(status.temp_c || {}).flat();

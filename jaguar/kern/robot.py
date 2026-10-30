@@ -22,6 +22,7 @@ from pathlib import Path
 import math
 import os
 import socket
+import statistics
 import threading
 import time
 
@@ -33,7 +34,15 @@ ROBOT_IP = "192.168.0.60"
 ROBOT_PORT = 10001
 TICK = 0.1                # PING + motorcommando elke 100 ms
 LOOP = 0.05               # regellus bij rijden op afstand
-MIN_BATTERY_V = 22.2      # onder deze spanning niet rijden (LiPo)
+MIN_BATTERY_V = 22.2      # onder deze spanning niet beginnen te rijden (LiPo)
+# Tijdens het rijden: de gemeten spanning springt ±0,5 V tussen twee metingen (5 Hz) en zakt kort bij het optrekken
+# (ritten van 8/10 en 22/10: in rust 21,8 tot 22,7 V binnen een paar seconden). Daarom de mediaan over BAT_VENSTER_S.
+BAT_VENSTER_S = 10.0
+BAT_MIN_N = 20            # zoveel metingen in het venster voor er een oordeel komt
+BAT_TERUG_V = 21.6        # V (3,6 V per cel): parcours afbreken; met bediening.py rijdt het robot terug naar de start
+BAT_NOOD_V = 21.0         # V (3,5 V per cel): helemaal stoppen, ook op de terugweg
+CAM_MAX_AGE = 1.5         # s: ouder camerabeeld = obstakeldetectie blind = niet vooruit rijden
+CAM_LATENCY = 0.4         # s: camera + wifi; zo ver rijdt de robot al voor hij het beeld ziet
 FAULT_ESTOP = 16          # FF-bit 4 = emergency stop
 K_V = 0.0031              # m/s per vermogenseenheid op vlakke grond (uit ritten: 150 → 0,46 m/s); wordt bijgeleerd
 APPROACH_MARGIN = 0.02   # vloeiend rijden stopt 2 cm voor het doel; de rest gaat met kruipstoten
@@ -90,6 +99,35 @@ class Aborted(RuntimeError):
     """STOP op de live pagina (bediening.py): motoren 0, rit afgebroken."""
 
 
+class Onderbroken(RuntimeError):
+    """De lopende beweging is afgebroken maar de rit gaat verder (pauze, of terug naar de start)."""
+
+
+class Gepauzeerd(Onderbroken):
+    """Pauze op de live pagina: motoren 0. Na Hervatten rijdt de stap verder naar hetzelfde doel (met_pauze)."""
+
+
+class NaarStart(Onderbroken):
+    """Het parcours afbreken en terugrijden naar de start (knop op de live pagina, of de batterij)."""
+
+
+class BatterijLaag(NaarStart):
+    """Spanning onder BAT_TERUG_V tijdens het rijden."""
+
+
+class BatterijLeeg(RuntimeError):
+    """Spanning onder BAT_NOOD_V: helemaal stoppen."""
+
+
+class Obstakel(RuntimeError):
+    """De camera ziet iets vlak voor de robot (jaguar/camera/obstakel.py). parcours.py wacht, rijdt eromheen of
+    kort de stap in; de andere rijscripts stoppen de rit."""
+
+
+class CameraWeg(Obstakel):
+    """Geen vers camerabeeld terwijl de obstakeldetectie aan staat: blind, dus de rit stopt."""
+
+
 class PID:
     """PID-regelaar.
     - D-term op de meting (bv. de gyrosnelheid) i.p.v. op de fout: geen stoot als het setpoint verspringt.
@@ -116,6 +154,11 @@ class Jaguar:
         self.phase = "rust"
         self.power = 0
         self.stop_requested = False   # True = elk volgend motorcommando wordt 0 en de rit breekt af
+        self.pause_requested = False  # True = elke beweging stopt (Gepauzeerd) tot de pagina hervat
+        self.terug_requested = False  # True = de volgende beweging breekt het parcours af (NaarStart)
+        self.batterij_terug = False   # op de terugweg na een lage batterij: dan telt alleen BAT_NOOD_V nog
+        self.obstacle = None          # obstakel.Detector: vooruit rijden stopt voor wat de camera ziet
+        self.obstakel = None          # reden als de rit voor een obstakel stopte
         self.sock = socket.create_connection((ip, port), timeout=3)
         self.sock.settimeout(0.5)
         self.lock = threading.Lock()
@@ -125,6 +168,7 @@ class Jaguar:
         self.encoder = {}     # "MM0"/"MM1" -> (kanaal1, kanaal2)
         self.enc_t = {}       # "MM0"/"MM1" -> ontvangsttijd (perf_counter)
         self.battery_v = None
+        self._bat = deque()   # (perf_counter, spanning) over BAT_VENSTER_S
         self.k_v = K_V
         self.jog_gain = 0.08  # m per seconde kruipstoot; wordt bijgeleerd
         # Afstand, koers (graden, + = links) en zijdelingse afwijking (m, + = links) t.o.v. de
@@ -162,7 +206,11 @@ class Jaguar:
         self.turn_min = TURN_MIN
         self.turn_gain = 40.0            # graden per seconde kruipstoot bij draaien; wordt bijgeleerd
         self.turn_ratio = None           # encoders/gyro bij de vorige draai
-        self._leerwaarden_laden()
+        # Leerwaarden alleen van en voor de echte robot: wat de nep-robot of de simulatie (127.0.0.1) leert, klopt
+        # niet voor de echte (de simulatie duwt turn_min bv. naar het maximum).
+        self.leerwaarden = not local
+        if self.leerwaarden:
+            self._leerwaarden_laden()
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
         self.reader.start()
 
@@ -198,6 +246,87 @@ class Jaguar:
         if self.writer is not None:
             with self.log_lock:
                 self.writer.writerow([f"{time.perf_counter() - self.t0:.4f}", self.phase, self.power, line])
+
+    def melding(self, text):
+        """Bericht voor de terminal, de CSV en de live pagina (pauze, terug naar de start, obstakel, batterij)."""
+        print(text)
+        self.note(f"MELDING {self.phase} {text}")
+        view = getattr(self.live, "view", self.live)     # MqttStream heeft de LiveView in .view
+        if view is not None and hasattr(view, "status"):
+            view.status["melding"] = text
+            view.status["melding_n"] = view.status.get("melding_n", 0) + 1
+
+    def batterij(self):
+        """Mediaan van de spanning over de laatste BAT_VENSTER_S (V); de laatste meting zolang er nog weinig zijn."""
+        if len(self._bat) < BAT_MIN_N:
+            return self.battery_v
+        return statistics.median(v for _, v in self._bat)
+
+    def _batterij_check(self):
+        if len(self._bat) < BAT_MIN_N:
+            return
+        v = self.batterij()
+        if v < BAT_NOOD_V:
+            self._stil()
+            raise BatterijLeeg(f"batterij leeg ({v:.1f} V, mediaan over {BAT_VENSTER_S:.0f} s): het robot stopt")
+        if v < BAT_TERUG_V and not self.batterij_terug:
+            self._stil()
+            raise BatterijLaag(f"batterij laag ({v:.1f} V, mediaan over {BAT_VENSTER_S:.0f} s)")
+
+    def _stil(self):
+        self.power = 0
+        self.send("PING")
+        self.send("MMW !M 0 0")
+
+    def _onderbreken(self):
+        """Wat de pagina vraagt (pauze, terug naar de start) of de batterij afdwingt: de lopende beweging afbreken."""
+        if self.terug_requested:
+            self._stil()
+            raise NaarStart("terug naar de start (knop op de pagina)")
+        if self.pause_requested:
+            self._stil()
+            raise Gepauzeerd("pauze")
+        self._batterij_check()
+
+    def pauzeren(self):
+        """Stilstaan zolang de pagina pauzeert. STOP (Aborted) en Terug naar start (NaarStart) werken ook nu."""
+        phase, self.phase = self.phase, "gepauzeerd"
+        self.melding(f"{phase}: gepauzeerd, klik op Hervatten")
+        try:
+            while self.pause_requested:
+                if self.terug_requested:
+                    raise NaarStart("terug naar de start (knop op de pagina)")
+                self.hold(TICK)
+        finally:
+            self.phase = phase
+        self.melding(f"{phase}: hervat")
+        self.hold(0.5)
+
+    def met_pauze(self, actie, hervat=None):
+        """actie() uitvoeren; pauzeert de pagina, dan stilstaan tot Hervatten, hervat() en actie() opnieuw.
+        Een actie moet dus naar een absoluut doel rijden (een geplande plek of koers), niet 'nog x meter'."""
+        while True:
+            try:
+                return actie()
+            except Gepauzeerd:
+                self.pauzeren()
+                if hervat is not None:
+                    hervat()
+
+    def _obstacle_room(self):
+        """Vrije weg (m) voor de robot volgens de camera, na de stopmarge en de beeldvertraging;
+        None = niets gezien binnen bereik. Geen vers beeld: niet blind verder rijden."""
+        det = self.obstacle
+        d, age = det.latest()
+        if age > CAM_MAX_AGE:
+            raise CameraWeg(f"geen vers camerabeeld ({det.error or f'{age:.1f} s oud'}): de obstakeldetectie is blind. "
+                            "Controleer de camera of zet Obstakels uit in Opties")
+        if d is None:
+            return None
+        room = d - det.stop - abs(self.odo.v) * (age + CAM_LATENCY)
+        if room <= 0:   # ook als het obstakel er al stond: anders zakt het vermogen naar 0 en wacht hij tot de timeout
+            raise Obstakel(f"obstakel op {d:.2f} m voor de robot (camera)")
+        return room
 
     def _parse(self, line):
         self.note(line)
@@ -237,6 +366,10 @@ class Jaguar:
                 self.odo.encoders(self._clock, (fl, -fr, rl, -rr))
         elif value.startswith("V="):
             self.battery_v = int(value[2:].split(":")[1]) / 10
+            now = time.perf_counter()
+            self._bat.append((now, self.battery_v))
+            while now - self._bat[0][0] > BAT_VENSTER_S:
+                self._bat.popleft()
         elif "=" in value:                                  # antwoord op een ~instelling
             naam, _, waarde = value.partition("=")
             if naam not in ("A", "T", "S", "P", "D", "CR", "AI", "CB"):
@@ -294,6 +427,8 @@ class Jaguar:
                 setattr(self, naam, data[naam])
 
     def _leerwaarden_bewaren(self):
+        if not self.leerwaarden:
+            return
         data = {n: getattr(self, n) for n in self.GRENZEN if getattr(self, n) is not None}
         data = {n: round(v, 4) for n, v in data.items() if self.GRENZEN[n][0] <= v <= self.GRENZEN[n][1]}
         try:
@@ -302,7 +437,10 @@ class Jaguar:
             pass
 
     def _guard(self, p):
-        """Stoppen als de robot te schuin staat of de wielen de grond niet meer betrouwbaar raken."""
+        """Stoppen als de robot te schuin staat, de wielen de grond niet meer betrouwbaar raken,
+        of (vooruit) de camera een obstakel binnen de stopafstand ziet."""
+        if p > 0 and self.obstacle is not None:
+            self._obstacle_room()
         if not self.odo.klaar:
             return
         if self.odo.kanteling > MAX_KANTEL:
@@ -403,6 +541,10 @@ class Jaguar:
             self._motor(0)
             print(f"{self.phase}: GESTOPT - {e}.")
             self.note(f"VAST {self.phase}")
+        except Onderbroken:
+            self._settle_turn()
+            self.note(f"GEDRAAID {self.phase} {self.heading - start:.2f}")
+            raise
         self._settle_turn()
         turned = self.heading - start
         self.note(f"GEDRAAID {self.phase} {turned:.2f}")
@@ -449,10 +591,10 @@ class Jaguar:
         """Vermogen `p` op beide kanten; `steer` > 0 maakt rechts sneller (draait naar links).
         Kanaal 1 = links (vooruit omhoog), kanaal 2 = rechts (vooruit omlaag)."""
         if self.stop_requested:   # alle rijlussen komen hier langs: STOP werkt in elke fase
-            self.power = 0
-            self.send("PING")
-            self.send("MMW !M 0 0")
+            self._stil()
             raise Aborted("STOP op de live pagina")
+        if p or steer:            # stilstaan (hold, _settled) mag altijd, ook tijdens een pauze
+            self._onderbreken()
         self.power = p
         left = max(-1000, min(1000, p - steer))
         right = max(-1000, min(1000, p + steer))
@@ -579,6 +721,8 @@ class Jaguar:
             while True:
                 if self.stop_requested:
                     raise Aborted("STOP op de live pagina")
+                if self.pause_requested or self.terug_requested:   # geen !M in positiemodus: finally zet de driver terug
+                    raise NaarStart("terug naar de start") if self.terug_requested else Gepauzeerd("pauze")
                 self.send("PING")
                 time.sleep(LOOP)
                 (fl, fr), (rl, rr) = self.encoder["MM0"], self.encoder["MM1"]
@@ -640,6 +784,10 @@ class Jaguar:
             self._motor(0)
             print(f"{self.phase}: VASTGELOPEN - {e}. Segment afgebroken.")
             self.note(f"VAST {self.phase}")
+        except (Onderbroken, Obstakel):
+            # Het stuk tot hier telt als gereden; de analyse telt de delen van een stap samen.
+            self.note(f"STOP {self.phase} {self._settled() - start:.4f}")
+            raise
         moved = self._settled() - start
         err = moved - sign * distance
         self.note(f"STOP {self.phase} {moved:.4f}")
@@ -755,6 +903,10 @@ class Jaguar:
                 break
             p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
             p_brake = max(self.creep, math.sqrt(2 * brake * remaining) / self.k_v)
+            if direction > 0 and self.obstacle is not None:   # op tijd afremmen voor wat de camera ziet
+                room = self._obstacle_room()
+                if room is not None:
+                    p_brake = min(p_brake, math.sqrt(2 * brake * room) / self.k_v)
             p = int(min(top, p_ramp, p_brake))
             # Kruipvermogen te laag om te bewegen: stap voor stap verhogen (blijft voor volgende segmenten).
             if p <= self.creep < top and now - t0 > ramp and now - moved_at > 0.6:
@@ -877,7 +1029,13 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
             from jaguar.live.mqtt_stream import MqttStream
             view = MqttStream(name, view, host=mqtt_host)   # rekent via dezelfde LiveView en publiceert naar MQTT/Grafana
         robot = Jaguar(ip, port, writer=writer, live=view)
-        yield robot
+        robot.obstacle = obstacle_detector()
+        try:
+            yield robot
+        except Obstakel as e:   # geen fout van het script: netjes stoppen (close() hieronder: motoren 0, E-Stop)
+            robot.obstakel = str(e)
+            robot.note(f"OBSTAKEL {robot.phase} {e}")
+            print(f"{robot.phase}: GESTOPT - {e}.")
     except BaseException as e:
         error = e
         raise
@@ -906,7 +1064,28 @@ def robot_session(record=True, suffix="", ip=ROBOT_IP, port=ROBOT_PORT, live=Tru
                 pass
 
 
-def prepare(robot, rest):
+def obstacle_detector():
+    """obstakel.Detector als Obstakels aan staat in de opties (jaguar/live/opties.json) en de camera gekalibreerd is."""
+    from jaguar.live import view as live_view
+    opts = live_view.OPTIONS
+    if not opts["obstakel"]:
+        return None
+    try:
+        from jaguar.camera import obstakel
+    except ImportError as e:
+        print(f"Obstakels: {e} (pip install opencv-python numpy): rijden zonder.")
+        return None
+    det = obstakel.get(opts["obstakel_stop_m"])
+    if det.model is None:
+        print("Obstakels: de camera is nog niet gekalibreerd (live pagina → Opties → Kalibreren): rijden zonder.")
+        return None
+    print(f"Obstakels: vooruit stoppen op {det.stop:.2f} m van wat de camera ziet"
+          + (f" (de camera ziet de vloer pas vanaf {det.model['blind_m']:.2f} m)" if det.stop > det.stop_m else "") + ".")
+    return det
+
+
+def prepare(robot, rest, min_v=MIN_BATTERY_V):
+    """Rustmeting, batterij en E-Stop vrijgeven. min_v: lager voor de terugweg naar de start (bediening.py)."""
     robot.hold(rest)
     for _ in range(3):
         if robot.zero_heading():
@@ -915,9 +1094,10 @@ def prepare(robot, rest):
         robot.hold(rest)
     else:
         print("Rustmeting blijft onrustig: koers en IMU-correcties zijn minder betrouwbaar.")
-    print(f"Batterij: {robot.battery_v} V, fault flags: {robot.fault}")
-    if robot.battery_v is not None and robot.battery_v < MIN_BATTERY_V:
-        raise SystemExit(f"Batterij te laag ({robot.battery_v} V), niet rijden.")
+    v = robot.batterij()
+    print(f"Batterij: {v} V, fault flags: {robot.fault}")
+    if v is not None and v < min_v:
+        raise SystemExit(f"Batterij te laag ({v:.1f} V, minstens {min_v:.1f} V), niet rijden.")
     robot.phase = "vrijgeven"
     robot.send("MMW !MG")
     robot.hold(1.0)

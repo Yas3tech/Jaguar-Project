@@ -15,14 +15,14 @@ Jaguar-Project/
 │  ├─ navigatie/        GPS: coördinaten naar meters, het noorden, een route van GPS-punten rijden
 │  ├─ kalibratie/       kalibreer.py en test_sondewiel.py: wielstraal en gyroschaal meten
 │  ├─ live/             de live webpagina (view.py, pagina.html, opties.json, mqtt_stream.py)
-│  └─ testen/           nep_robot.py: de nep-robot
+│  ├─ camera/           obstakel.py: obstakels zien met de camera (standaard uit, aan in Opties)
+│  └─ testen/           nep_robot.py (opname afspelen), sim_robot.py (gesimuleerde robot) en de tests
 ├─ ritten/              CSV's en analyses van alle ritten
 ├─ dashboard/           dashboard.html (resultaat) en template.html (bron)
-├─ config/              kalibratie.json (gemeten wielstraal)
+├─ config/              kalibratie.json (gemeten wielstraal), leerwaarden.json, camera_kalibratie.json
 ├─ grafana/             Grafana, InfluxDB en MQTT (docker compose)
 ├─ testdata/            demo_rit.csv voor de nep-robot
-├─ docs/robot/          handleidingen en netwerkgegevens van de robot
-└─ camera/              camera en obstakeldetectie, bewust los van de rest
+└─ docs/robot/          handleidingen en netwerkgegevens van de robot
 ```
 
 Alle commando's draai je vanuit de projectmap, bijvoorbeeld `python -m jaguar.rijden.rechtdoor --power 250 --distance 2`.

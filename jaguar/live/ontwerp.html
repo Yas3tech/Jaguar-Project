@@ -133,6 +133,12 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
 dialog .inh { padding: 18px 20px; display: grid; gap: 12px; } dialog h2 { margin: 0; font-size: 18px; }
 dialog ul { margin: 0; padding-left: 20px; color: var(--ink-2); line-height: 1.6; }
 dialog .knoppen { display: flex; gap: 10px; justify-content: flex-end; }
+.gps-kop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gps-oordeel { font-size: 13px; font-weight: 650; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--ink-2); }
+.gps-oordeel::before { content: "● "; }
+.gps-oordeel.goed { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.gps-oordeel.matig { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.gps-oordeel.slecht, .gps-oordeel.geen { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
 label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; } label.vink input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--accent); }
 </style>
 </head>
@@ -242,6 +248,16 @@ label.vink { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
         <button class="btn ghost" id="b-loc">Mijn locatie gebruiken</button>
         <div class="veld"><label for="i-b0">Het robot kijkt bij de start naar (° van het noorden)</label><input id="i-b0" type="number" step="1" min="0" max="359" style="width:80px"></div>
         <p class="melding">Het startpunt is (0, 0). Sleep op de kaart het oranje handvat om de richting te kiezen. Zet het robot precies zo neer. Het GPS van het robot is te ruw (3 tot 15 m) om de route op te sturen: de route wordt gereden met de wielen en de gyro.</p>
+      </section>
+      <section id="sec-gps" hidden>
+        <h3>GPS-ontvangst hier</h3>
+        <div class="gps-kop"><span class="gps-oordeel" id="gps-oordeel" role="status">niet gemeten</span><button class="btn ghost" id="b-gps">GPS meten</button></div>
+        <div class="stats" id="gps-stats" hidden>
+          <div class="stat" title="95 % van de posities ligt zo dicht bij hun gemiddelde"><div class="k">Spreiding</div><div class="v" id="gps-spr">–</div></div>
+          <div class="stat" title="Zo ver is de positie in een minuut weggelopen, terwijl het robot stilstaat"><div class="k">Wegloop (1 min)</div><div class="v" id="gps-weg">–</div></div>
+        </div>
+        <p class="melding" id="gps-msg">Zet het robot op de plek waar je wilt rijden en laat het stilstaan. De meting kijkt een minuut lang hoeveel de GPS-positie beweegt (het robot geeft geen satellieten of HDOP door). De E-Stop blijft actief.</p>
+        <button class="btn ghost" id="b-gps-start" hidden>GPS-positie als startpunt</button>
       </section>
       <section id="sec-binnen">
         <h3>Richting bij de start</h3>
@@ -508,6 +524,7 @@ function teken() {
   ctx.fillStyle = S.modus === "buiten" ? "#cfd9d2" : css("--canvas"); ctx.fillRect(0, 0, W, H);
   if (S.modus === "buiten") tekenTegels();
   tekenRaster();
+  if (S.modus === "buiten" && gps && gps.punten) tekenGps();
   const k = S.view.ppm, pts = S.pts;
   // vrije ruimte
   if (P.bbox && pts.length > 1) { const mg = 1, [a, b] = toS(P.bbox.x0 - mg, P.bbox.y1 + mg), [c, d] = toS(P.bbox.x1 + mg, P.bbox.y0 - mg);
@@ -559,6 +576,17 @@ function teken() {
   if (S.modus === "buiten") { ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.font = `10px ${css("--f-body")}`; ctx.fillStyle = S.kaart.laag === "sat" ? "#fff" : css("--ink-3"); ctx.fillText(LAGEN[S.kaart.laag].bron, W - 8, H - 70); }
 }
 const handle = { x: 0, y: 0 };
+function tekenGps() {                                         // GPS-posities van de meting en hun spreiding
+  const m = meterPerGraad(S.kaart.lat), xy = (la, lo) => toS((lo - S.kaart.lon) * m.lon, (la - S.kaart.lat) * m.lat);
+  const kleur = css({ goed: "--good", matig: "--warn" }[gps.oordeel] || "--bad");
+  ctx.fillStyle = kleur; ctx.globalAlpha = .6;
+  for (const [la, lo] of gps.punten) { const [sx, sy] = xy(la, lo); ctx.beginPath(); ctx.arc(sx, sy, 2.2, 0, 7); ctx.fill(); }
+  const [cx, cy] = xy(gps.lat, gps.lon), r = Math.max(6, gps.spreiding * S.view.ppm);
+  ctx.globalAlpha = .14; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.strokeStyle = kleur; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = `bold 11px ${css("--f-body")}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.lineWidth = 3; ctx.strokeStyle = "rgb(255 255 255 / .85)";
+  const t = `GPS ± ${nl(gps.spreiding, 1)} m`; ctx.strokeText(t, cx, cy - r - 4); ctx.fillStyle = kleur; ctx.fillText(t, cx, cy - r - 4);
+}
 
 /* ------------------------------------------------------------ bewerken */
 function nieuw(modus) { S.modus = modus; if (modus === "binnen") S.b0 = [0, 90, 180, 270].includes(S.b0) ? S.b0 : 0;
@@ -568,7 +596,8 @@ function toon() {
   if (!S.modus) return;
   const buiten = S.modus === "buiten";
   $("badge").textContent = buiten ? "Buiten" : "Binnen"; $("badge").className = "badge" + (buiten ? " buiten" : "");
-  $("sec-buiten").hidden = !buiten; $("sec-binnen").hidden = buiten;
+  $("sec-buiten").hidden = !buiten; $("sec-binnen").hidden = buiten; $("sec-gps").hidden = !buiten;
+  if (buiten && !gps) fetch("/gps.json").then((r) => (r.ok ? r.json() : null)).then((a) => { if (a && a.bezig) { gps = a; toonGps(); } }).catch(() => {});
   $("i-lat").value = S.kaart.lat; $("i-lon").value = S.kaart.lon; $("i-b0").value = Math.round(S.b0);
   $("l-osm").setAttribute("aria-pressed", S.kaart.laag === "osm"); $("l-sat").setAttribute("aria-pressed", S.kaart.laag === "sat");
   for (const b of document.querySelectorAll("[data-b0]")) b.setAttribute("aria-pressed", +b.dataset.b0 === Math.round(S.b0));
@@ -831,6 +860,34 @@ $("i-lon").onchange = () => { S.kaart.lon = Math.max(-180, Math.min(180, parseFl
 $("b-loc").onclick = () => { if (!navigator.geolocation) return melding("Locatie niet beschikbaar in deze browser.");
   navigator.geolocation.getCurrentPosition((p) => { S.kaart.lat = p.coords.latitude; S.kaart.lon = p.coords.longitude; toon(); melding(`Locatie ± ${Math.round(p.coords.accuracy)} m`); },
     () => melding("Locatie niet gelukt (geen toestemming of geen GPS op deze laptop). Vul de coördinaten zelf in."), { timeout: 8000 }); };
+/* GPS-ontvangst op deze plek: bediening.py verbindt met het robot zonder de E-Stop vrij te geven */
+let gps = null, gpsTimer = 0;
+const GPS_LABEL = { wachten: "meten…", geen: "geen gegevens", goed: "goed", matig: "matig", slecht: "slecht" };
+async function gpsVraag(aan) {                                // aan = true/false: starten/stoppen; undefined: alleen de stand
+  try {
+    const r = await fetch(aan === undefined ? "/gps.json" : "/gps", aan === undefined ? { cache: "no-store" }
+      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ aan }) });
+    const a = await r.json(); if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
+    gps = a;
+  } catch (e) { gps = Object.assign({}, gps, { bezig: false, fout: e instanceof TypeError ? "Geen verbinding met bediening.py (start: python -m jaguar.rijden.bediening)." : e.message }); }
+  toonGps();
+}
+function toonGps() {
+  const g = gps || {}, o = g.oordeel;
+  $("gps-oordeel").textContent = o ? GPS_LABEL[o] : "niet gemeten"; $("gps-oordeel").className = "gps-oordeel " + (o || "");
+  $("b-gps").textContent = g.bezig ? "Stop" : o ? "Opnieuw meten" : "GPS meten";
+  $("gps-stats").hidden = g.spreiding == null;
+  if (g.spreiding != null) { $("gps-spr").innerHTML = `${nl(g.spreiding, 1)}<small> m</small>`; $("gps-weg").innerHTML = `${nl(g.wegloop, 1)}<small> m</small>`; }
+  const msg = $("gps-msg");
+  if (g.fout) { msg.className = "melding bad"; msg.textContent = g.fout; }
+  else if (o) { msg.className = "melding" + ({ goed: " ok", matig: " warn" }[o] || (o === "wachten" ? "" : " bad"));
+    msg.textContent = g.uitleg + (g.hz ? ` (${nl(g.hz, 1)} posities per seconde)` : "") + (g.bezig ? "" : " Meting gestopt."); }
+  $("b-gps-start").hidden = g.lat == null || !["goed", "matig"].includes(o);
+  clearTimeout(gpsTimer); if (g.bezig) gpsTimer = setTimeout(() => gpsVraag(), 1000);
+  dirty = true;
+}
+$("b-gps").onclick = () => gpsVraag(!(gps && gps.bezig));
+$("b-gps-start").onclick = () => { S.kaart.lat = gps.lat; S.kaart.lon = gps.lon; toon(); melding(`Startpunt = gemiddelde GPS-positie (± ${nl(gps.spreiding, 1)} m). Zet het robot daar neer.`); };
 function melding(t) { const s = $("status"); s.textContent = t; clearTimeout(melding.t); melding.t = setTimeout(() => (s.textContent = ""), 6000); }
 $("b-kopieer").onclick = async () => { try { await navigator.clipboard.writeText($("cmd").textContent); melding("gekopieerd"); } catch { melding("kopiëren niet gelukt: selecteer de tekst zelf"); } };
 

@@ -1,9 +1,9 @@
 # live/ — meekijken tijdens het rijden
 
 - `view.py`: de lokale webserver (poort 8765) en de berekeningen voor de tegels en grafieken.
-- `pagina.html`: de pagina die je in de browser ziet (tegels, grafieken, Rijden, STOP, Analyse, Opties).
+- `pagina.html`: de pagina die je in de browser ziet (tegels, grafieken, camera, Rijden, Pauze, Terug naar start, Handmatig, STOP, Analyse, Opties). Wat die knoppen doen: zie [rijden/](../rijden/README.md#bediening-vanuit-de-browser).
 - `ontwerp.html`: de ontwerper achter de knop Rijden (zie hieronder).
-- `opties.json`: bewaarde keuzes van het venster Opties (grafieken tonen of verbergen, vanzelf analyseren).
+- `opties.json`: bewaarde keuzes van het venster Opties (grafieken tonen of verbergen, vanzelf analyseren, camerabeeld, obstakels en hun stopafstand). Camera en obstakels staan standaard uit; zie [camera/](../camera/README.md).
 - `mqtt_stream.py`: stuurt dezelfde waarden naar MQTT voor Grafana (zie `grafana/README.md`).
 
 Elk rijscript start dit vanzelf. Uitschakelen kan met `--no-live`.
@@ -18,6 +18,8 @@ Eerst kies je tussen twee kaarten:
 Een boog kan op twee manieren gereden worden (keuze in het paneel Rijden):
 - **In stukjes** (standaard, veilig): korte rechte stukjes van 10° met draaien ter plaatse (`jaguar/navigatie/route.py`, `boog_naar_stappen`). Begin, einde en eindkoers kloppen, maar het is langzaam (een boog van 90° duurt ongeveer 50 s) en elke draai ter plaatse schuift het robot een beetje.
 - **Vloeiend** (nieuw, nog niet op het robot getest): `Jaguar.arc()` in `jaguar/kern/robot.py` rijdt de boog in één beweging. De doelkoers draait mee met de afstand (koers = start + hoek × afstand / booglengte), een voorspelde stuurwaarde voor de straal houdt de buitenkant sneller dan de binnenkant, en de gyro-PID stuurt de rest bij; daarna zet `eindkoers()` een resterende fout > 1° recht. Straal minstens 0,5 m, vermogen hoogstens 220. Controle zonder robot: `python -m jaguar.testen.sim_boog` (een model met slip en vertraging; in de simulatie lag het eindpunt op 1 tot 14 cm van het ideale punt). Begin op het echte robot met een ruime boog (straal vanaf 1 m), de noodstop bij de hand.
+
+**GPS-ontvangst hier** (alleen Buiten): zet het robot op de plek waar je wilt rijden en klik op **GPS meten**. `bediening.py` verbindt met het robot zonder de E-Stop vrij te geven (het robot kan dus niet rijden) en kijkt een minuut lang hoeveel de GPS-positie beweegt terwijl het robot stilstaat. Het robot geeft geen satellieten of HDOP door, alleen `GPRMC`. Na 30 s zegt de pagina **goed** (spreiding ≤ 3 m en wegloop ≤ 2 m), **matig** (≤ 8 m en ≤ 5 m) of **slecht**, met de cijfers erbij. De posities en hun cirkel komen op de kaart. Bij goed of matig zet **GPS-positie als startpunt** de start op hun gemiddelde. De meting loopt door tot je op Stop klikt, tot je een rit start of tot de pagina 30 s niets meer vraagt. Een rustige positie is nog geen juiste positie: weerkaatsing tegen een gebouw kan een vaste fout van enkele meters geven. De route zelf rijdt hoe dan ook op de wielen en de gyro. Zie `GpsKwaliteit` in `jaguar/navigatie/gps.py`.
 
 Zelftests van de ontwerper: open `ontwerp.html?selftest=1` (omzetting tekening → robotstappen) of `?selftest=2` (muisbewerkingen) in een browser; de titel zegt OK of FOUT.
 

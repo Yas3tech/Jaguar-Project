@@ -59,13 +59,15 @@ TEMPLATE = ROOT / "dashboard" / "template.html"
 
 
 def is_drive(fase):
-    """Rechtdoor rijden: heen/terug/rijden, of een parcoursstap zoals '1-vooruit' of '2-achteruit'."""
-    return fase in ("rijden", "heen", "terug") or re.fullmatch(r"\d+-(vooruit|achteruit|boog)", fase) is not None
+    """Rechtdoor rijden: heen/terug/rijden, handmatig (bediening.py), of een parcoursstap zoals '1-vooruit',
+    '2-achteruit' of 'terug-2-vooruit' (de terugweg naar de start)."""
+    return (fase in ("rijden", "heen", "terug", "handmatig")
+            or re.fullmatch(r"(terug-)?\d+-(vooruit|achteruit|boog)", fase) is not None)
 
 
 def is_turn(fase):
     """Ter plaatse draaien: parcoursstap zoals '3-draai'."""
-    return re.fullmatch(r"\d+-draai", fase) is not None
+    return re.fullmatch(r"(terug-)?\d+-draai", fase) is not None
 
 
 def load(path):
@@ -463,7 +465,8 @@ def analyse(path):
             plan.append(step)
     summary = {
         "rit": Path(path).stem,
-        "rittype": "parcours" if any(re.match(r"\d+-", f) for f in fases) else "heen en terug" if "terug" in fases else "rechtdoor",
+        "rittype": ("parcours" if any(re.match(r"\d+-", f) for f in fases) else "naar de start" if any(f.startswith("terug-") for f in fases)
+                    else "handmatig" if "handmatig" in fases else "heen en terug" if "terug" in fases else "rechtdoor"),
         "verplaatsing_m": rnd(dist[-1], 2),
         "snelheid_max_ms": rnd(v_max, 2),
         "pitch_eind_deg": final_angle(pitch),

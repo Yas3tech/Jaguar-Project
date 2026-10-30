@@ -10,6 +10,7 @@ patroon of een rand (tapijt) en donker. Alleen vooruit: achteruit is de robot bl
 Rij → afstand: d = k / (y − y_horizon), met y de rij (0 = boven, 1 = onder). k en y_horizon komen uit
 de kalibratie (camera_kalibratie.json): minstens twee keer de voet van een muur aanklikken op een
 gekende afstand (Opties → Obstakels op de live pagina).
+Aan/uit en de stopafstand: Opties op de live pagina (jaguar/live/opties.json). OpenCV: pip install opencv-python numpy.
 """
 import json
 import threading
@@ -19,7 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-KALIBRATIE = Path(__file__).parent / "camera_kalibratie.json"
+KALIBRATIE = Path(__file__).resolve().parents[2] / "config" / "camera_kalibratie.json"
 RESOLUTIE, FPS = "320x240", 10   # klein beeld: weinig extra wifi naast de robotgegevens
 BAND = (0.38, 0.62)       # middelste strook: de weg van de robot (≈ 0,6-0,8 m breed op 1-2 m)
 START = 0.97              # onderste rij die we bekijken (daaronder kan de robot zelf in beeld komen)
@@ -156,7 +157,7 @@ class Detector:
         return ok[0] if ok else None
 
     def _loop(self):
-        import live_view   # zelfde camera-login als de live pagina
+        from jaguar.live import view as live_view   # zelfde camera-login als de live pagina
         while self.running:
             try:
                 resp = live_view.open_camera(RESOLUTIE, FPS)
