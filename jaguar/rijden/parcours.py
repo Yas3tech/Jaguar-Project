@@ -21,7 +21,7 @@ import argparse
 import math
 import time
 
-from jaguar.kern.robot import (CameraWeg, Gepauzeerd, Obstakel, add_drive_args, positive_seconds, prepare,
+from jaguar.kern.robot import (CameraWeg, Gepauzeerd, Obstakel, Vastgelopen, add_drive_args, positive_seconds, prepare,
                                robot_session)
 from jaguar.navigatie.gps import hoek180
 
@@ -67,11 +67,12 @@ def main():
     print("Parcours: " + " → ".join(f"{s} {v:g} {'m' if s in ('vooruit', 'achteruit') else '°'}" for s, v in args.stappen))
     with robot_session(args.csv, "_parcours", args.ip, args.port, args.live, args.mqtt,
                        args.mqtt_host, args.network) as robot:
+        robot.precies = args.precies
         prepare(robot, args.rest)
         rijd(robot, args.stappen, args.power, args.turn_power, args.pause, args.ramp, args.creep, args.tolerance)
 
 
-def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=60, tolerance=3.0, prefix=""):
+def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=60, tolerance=10.0, prefix=""):
     """De stappen na elkaar rijden (na prepare). Ook gebruikt door bediening.py (knop op de live pagina).
     prefix: voor de fasenamen (bv. "terug-" voor de terugweg naar de start, zodat de analyse de stappen apart houdt).
 
@@ -123,6 +124,44 @@ def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=6
     robot.hold(2.0)
     x, y = robot.odo.x, robot.odo.y
     print(f"Einde: {x:+.3f} m vooruit, {y * 100:+.1f} cm links t.o.v. de start, koers {robot.heading:+.1f}° (schatting)")
+    return px, py
+
+
+MAX_BIJSTUREN = 2     # zo vaak mag een punt opnieuw aangereden worden als de GPS zegt dat het robot ernaast staat
+MIN_STAP = 0.15       # m: dichter dan dit bij het punt = er al
+
+
+def rijd_punten(robot, n, doel, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=60, tolerance=10.0):
+    """Van punt naar punt rijden met een positie die onderweg beter wordt (GPS): doel(i) geeft voor punt i
+    (0 … n−1) waar het NU ligt in het stelsel van de odometrie, als (x, y, marge). Voor elk punt: draaien naar het
+    punt, in één keer erheen rijden, en dan opnieuw vragen waar het ligt. Ligt het verder dan `marge` (de GPS heeft
+    de schatting onderweg verbeterd), dan rijdt het robot het stuk bij, hoogstens MAX_BIJSTUREN keer.
+    Zonder GPS geeft doel() steeds hetzelfde punt en is dit gewoon van punt naar punt rijden op de odometrie."""
+    k = 0
+    for i in range(n):
+        for poging in range(1 + MAX_BIJSTUREN):
+            x, y, marge = doel(i)
+            dx, dy = x - robot.odo.x, y - robot.odo.y
+            afstand = math.hypot(dx, dy)
+            if afstand < (MIN_STAP if poging == 0 else max(MIN_STAP, marge)):
+                break
+            if poging:
+                robot.melding(f"punt {i + 1}: volgens de GPS nog {afstand:.2f} m ervandaan, bijsturen")
+            if k:
+                robot.phase = "pauze"
+                robot.hold(pause)
+            eind = robot.target_heading + hoek180(math.degrees(math.atan2(dy, dx)) - robot.target_heading)
+            if abs(eind - robot.target_heading) >= 1.0:
+                k += 1
+                robot.phase = f"{k}-draai"
+                robot.met_pauze(lambda eind=eind: robot.turn(eind - robot.target_heading, turn_power),
+                                lambda: setattr(robot, "target_heading", robot.heading))
+            k += 1
+            robot.phase = f"{k}-vooruit"
+            robot.note(f"PLAN {robot.phase} {afstand:.4f}")
+            rechtdoor(robot, (robot.odo.x, robot.odo.y), afstand, power, turn_power, ramp, creep, tolerance)
+    robot.phase = "uitbollen"
+    robot.hold(2.0)
 
 
 def naar_start(x, y, koers):
@@ -175,12 +214,14 @@ def rechtdoor(robot, start, planned, power, turn_power, ramp, creep, tolerance):
         togo = planned - along()
         try:
             robot.drive_distance(power if togo >= 0 else -power, abs(togo), ramp, creep, tolerance=tolerance / 1000)
+            if robot.vast:
+                raise Vastgelopen(f"vastgelopen na {along():.2f} m van {planned:.2f} m ({robot.vast}): het parcours stopt hier")
             return end
         except Gepauzeerd:
             robot.pauzeren()                            # daarna verder naar hetzelfde hoekpunt
             continue
-        except CameraWeg:
-            raise                                       # blind: niet verder rijden
+        except (CameraWeg, Vastgelopen):
+            raise                                       # blind of vast: niet verder rijden
         except Obstakel as e:
             robot.hold(0.3)
             robot.melding(f"{robot.phase}: {e}")

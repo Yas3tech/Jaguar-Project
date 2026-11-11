@@ -17,6 +17,7 @@ Aannames (Jaguar-handleiding + config OutDoorRobotConfig_4x4.xml):
 import csv
 import json
 import math
+import os
 import re
 import statistics as st
 import sys
@@ -34,6 +35,8 @@ ROOT = Path(__file__).resolve().parents[2]   # projectmap
 CALIBRATION = ROOT / "config" / "kalibratie.json"
 KALIBRATIE = json.loads(CALIBRATION.read_text(encoding="utf-8")) if CALIBRATION.exists() else {}
 WHEEL_R = KALIBRATIE.get("wielstraal_m", WHEEL_R)
+# Een andere robot dan de gekalibreerde (de websimulator rekent met 0,135 m): JAGUAR_WIELSTRAAL=0.135 in de omgeving.
+WHEEL_R = float(os.environ.get("JAGUAR_WIELSTRAAL") or WHEEL_R)
 GYRO_LSB_DPS /= KALIBRATIE.get("gyro_schaal", 1.0)
 M_PER_CNT = 2 * math.pi * WHEEL_R / WHEEL_CNT
 SMOOTH_S = 0.5            # venster voor hellingshoeken (laagdoorlaat)
@@ -78,12 +81,14 @@ def load(path):
             p = line.split(",")
             if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID", "PLAN", "KOERS", "OMWEG", "OBSTAKEL", "MELDING"):   # eigen regels van het rijscript
                 notes.append((t, line.split()))
-            elif p[0].startswith("#") and len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
-                try:
-                    imu.append({"t": t, "fase": fase, "pwr": int(r["vermogen"]), "yaw": float(p[2]),
-                                "g": [int(v) for v in p[4:7]], "a": [int(v) for v in p[8:11]]})
-                except ValueError:
-                    pass                # beschadigd wifipakket (bv. "ACC,-6,,256"): sample overslaan
+            elif p[0].startswith("#"):
+                velden = odometrie.imu_velden(p)   # None = beschadigd wifipakket (bv. "ACC,-6,,256"): sample overslaan
+                if velden:
+                    try:
+                        yaw = float(p[2]) if len(p) > 2 and p[1] == "YAW" else 0.0
+                        imu.append({"t": t, "fase": fase, "pwr": int(r["vermogen"]), "yaw": yaw, "g": velden[1], "a": velden[2]})
+                    except ValueError:
+                        pass
             elif line[:4] in ("MM0 ", "MM1 ") and "=" in line:
                 board, kv = line.split(" ", 1)
                 key, val = kv.split("=", 1)

@@ -39,7 +39,30 @@ STIL_TRIL = 0.03          # g: onder deze trilling en zonder pulsen staat de rob
 Q_V = 0.006               # procesruis snelheid (m²/s³), uit de overbruggingsmeting
 Q_B = 0.004               # procesruis versnellingsbias + helling (m²/s⁵)
 R_WIEL = 0.02 ** 2        # meetruis wielsnelheid met vaste klok (m²/s²)
+GPS_STIL_MIN = 10         # pakketten (2 s) stilstand volgens de GPS terwijl de wielen draaien = geblokkeerd
 PITCH_TEKEN = -1          # neus omhoog = negatieve gyro Y (gecontroleerd: kantelen naar -85° gaf +81° gyro)
+
+
+def imu_velden(p):
+    """Een IMU-regel, al gesplitst op komma's -> (volgnummer, gyro [x, y, z], acc [x, y, z]) in counts, of None.
+    De robot stuurt 17 velden ("#nr,YAW,..,GYRO,x,y,z,ACC,x,y,z,ADC,.."); andere bronnen (de simulator van
+    robotics.dinno.be) kunnen er velden bij zetten, zoals COMP. Daarom worden GYRO en ACC op naam gezocht.
+    Een beschadigd pakket (twee regels aan elkaar, een leeg getal) geeft None."""
+    try:
+        if not p[0].startswith("#"):
+            return None
+        if len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
+            i, j = 3, 7
+        else:                                     # de handleiding schrijft "Gyro,…,Accel,…,Comp,…"
+            namen = [v.strip().upper() for v in p]
+            i = namen.index("GYRO")
+            j = namen.index("ACC") if "ACC" in namen else namen.index("ACCEL")
+        g, a = p[i + 1:i + 4], p[j + 1:j + 4]
+        if len(g) != 3 or len(a) != 3:
+            return None
+        return int(p[0][1:]), [int(float(v)) for v in g], [int(float(v)) for v in a]
+    except (ValueError, IndexError):
+        return None
 
 
 class Odometrie:
@@ -82,6 +105,9 @@ class Odometrie:
         self.afstand = 0.0             # som |ds|
         self.gecorrigeerd = 0.0        # som |ds| waarbij niet het gemiddelde van 4 wielen telde
         self._ok_reeks = 0
+        self._tril_rijden, self._tril_n = 0.0, 0   # gewone trilling tijdens het rijden (g) en uit hoeveel pakketten
+        self._gps_v = self._gps_t = None           # laatste snelheid over de grond volgens de GPS (m/s) en wanneer
+        self._gps_ok = self._gps_stil = 0          # pakketten waarin de GPS-snelheid klopte met de wielen / stilstand meldde
         self.n_enc = 0                 # aantal verwerkte encoderpakketten
         self.acc0 = list(acc_rust) if acc_rust else None
         self.gbias = list(gyro_bias) if gyro_bias else None
@@ -151,6 +177,11 @@ class Odometrie:
         self.P = [[p00, p01], [p01, P[1][1] + Q_B * dt]]
         self.ds_imu += self.v * dt
         self._hist.append((t, self.v))
+
+    def gps(self, t, v):
+        """Snelheid over de grond volgens de GPS (m/s), op robotklok t. Een tweede mening over 'rijdt het robot echt':
+        de fabrikant geeft 0,1 knoop (0,05 m/s) op voor de snelheid, veel beter dan de positie."""
+        self._gps_v, self._gps_t = v, t
 
     def _v_op(self, t):
         for th, v in reversed(self._hist):
@@ -231,8 +262,28 @@ class Odometrie:
                     z, slip = cr, slip + ["kant links"]
 
         S = self.P[0][0] + R_WIEL
-        lucht = (abs(z) > LUCHT_V and tril < LUCHT_TRIL) or self.kanteling > LUCHT_KANTEL
         past = abs(z - v_pred) <= POORT + 3 * math.sqrt(S)
+        # Wielen in de lucht: ze draaien snel, er is geen trilling EN de IMU voelde het robot niet optrekken (de
+        # wielsnelheid past niet bij de IMU). Geen trilling alleen is geen bewijs: op een gladde vloer, en in de
+        # simulator van robotics.dinno.be, rijdt het robot zonder te trillen (daar stopte elke rit na 0,5 m).
+        # Trilt dit robot bij gewoon rijden zelf niet (geleerd uit de eerste 2 s rijden), dan zegt de trilling niets
+        # en blijft alleen het kantelen over.
+        tril_zegt_iets = self._tril_n < 10 or self._tril_rijden > 1.5 * LUCHT_TRIL
+        lucht = (abs(z) > LUCHT_V and tril < LUCHT_TRIL and tril_zegt_iets and not past) or self.kanteling > LUCHT_KANTEL
+        # Geblokkeerd (tegen een obstakel, wielen slippen allemaal even hard): de wielen draaien, de GPS zegt stilstand.
+        # Alleen een GPS met fix telt, en pas na GPS_STIL_MIN pakketten stilstand op rij (hij loopt tot een seconde
+        # achter). Een GPS zonder ontvangst meldt geen fix of een springende snelheid, geen nette nul.
+        if self._gps_t is not None and t - self._gps_t < 1.0 and abs(z) > 0.5:
+            if abs(self._gps_v - abs(z)) < 0.25:
+                self._gps_ok, self._gps_stil = self._gps_ok + 1, 0
+            elif self._gps_v < 0.15:
+                self._gps_stil += 1
+            else:
+                self._gps_stil = 0
+        else:
+            self._gps_stil = 0
+        if self._gps_stil >= GPS_STIL_MIN:
+            lucht = True
         if self.overbrug_t > MAX_OVERBRUG:
             # Te lang op de IMU: terug naar de wielen zodra ze onderling kloppen en de robot trilt
             # zoals bij echt rijden (anders draaien ze in de lucht of slippen ze allemaal).
@@ -242,6 +293,9 @@ class Odometrie:
                 self.v, self.P[0][0] = z, 0.05
         if past and not lucht:
             self._meet(z, R_WIEL if not slip else 4 * R_WIEL, t_mid)
+            if not slip and abs(z) > LUCHT_V:
+                self._tril_n += 1
+                self._tril_rijden += (tril - self._tril_rijden) / min(self._tril_n, 25)
             ds = z * dt
             if slip:
                 self.onzekerheid += abs(ds - gem) / 2

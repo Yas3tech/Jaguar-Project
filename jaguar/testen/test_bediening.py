@@ -17,7 +17,6 @@ from jaguar.rijden.bediening import Control, samenstellen
 from jaguar.rijden.parcours import naar_start
 from jaguar.testen.sim_robot import Sim, serve
 
-POORT = 10011
 TOL_M, TOL_GRADEN = 0.05, 2.5
 
 
@@ -172,10 +171,11 @@ def test_stop_in_pauze(c, sim):
 
 def main():
     test_naar_start()
-    srv = socket.create_server(("127.0.0.1", POORT))
+    srv = socket.create_server(("127.0.0.1", 0))        # een vrije poort: geen botsing met een andere test of een sim_robot
+    poort = srv.getsockname()[1]
     sim = Sim(24.0, 0.0)
     threading.Thread(target=serve, args=(srv, sim, False), daemon=True).start()
-    args = argparse.Namespace(ip="127.0.0.1", port=POORT, rest=1.0, mqtt=False, mqtt_host="", csv=False)
+    args = argparse.Namespace(ip="127.0.0.1", port=poort, rest=1.0, mqtt=False, mqtt_host="", csv=False)
     hub = live_view.Hub(live_view.LiveView("test"))
     c = Control(hub, args)
     hub.control = c

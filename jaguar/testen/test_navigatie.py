@@ -146,6 +146,65 @@ def test_kwaliteit_binnen_ritten():
     print(f"  ({totaal} oordelen op binnenritten, {goed} keer goed)")
 
 
+def test_uitlijning():
+    """Het gereden spoor op het GPS-spoor leggen: noorden, schaal en positie komen eruit, ook met ruis; een dwalende
+    GPS bij een stilstaand robot of een te kort spoor geeft geen bruikbare passing."""
+    from jaguar.navigatie.gps import Uitlijning, enu_naar_robot, robot_naar_enu
+    random.seed(7)
+    lok = Lokaal(50.84, 4.32)
+    spoor = [(i * 0.1, 0.0) for i in range(100)] + [(10.0, j * 0.1) for j in range(60)]      # 10 m vooruit, 6 m naar links
+    for b0, schaal, ruis in ((0.0, 1.0, 0.02), (73.0, 0.95, 0.3), (200.0, 1.04, 0.3), (331.0, 1.0, 1.5)):
+        u = Uitlijning(lok)
+        for x, y in spoor:
+            e, n = robot_naar_enu(x * schaal, y * schaal, b0)
+            lat, lon = lok.naar_ll(e + 3 + random.gauss(0, ruis), n - 2 + random.gauss(0, ruis))
+            u.meting({"fix": True, "lat": lat, "lon": lon}, x, y)
+        r = u.resultaat()
+        tol_hoek, tol_schaal = (0.5, 0.005) if ruis < 0.1 else ((3.0, 0.04) if ruis < 1 else (12.0, 0.2))
+        assert abs(hoek180(r["b0"] - b0)) < tol_hoek and abs(r["schaal"] - schaal) < tol_schaal, (b0, schaal, ruis, r)
+        assert abs(r["rms"] - ruis * math.sqrt(2)) < 0.35 * ruis * math.sqrt(2) + 0.01, (ruis, r["rms"])
+        assert Uitlijning.schaal_bruikbaar(r) == (ruis < 0.1), (ruis, r)
+        if ruis < 1:
+            e, n = robot_naar_enu(10 * schaal, 6 * schaal, b0)
+            pe, pn = u.positie(10.0, 6.0)
+            assert math.hypot(pe - e - 3, pn - n + 2) < 4 * ruis + 0.02, (pe, pn)
+            ox, oy = u.naar_odo(e + 3, n - 2)
+            assert math.hypot(ox - 10, oy - 6) < 4 * ruis + 0.02, (ox, oy)
+    u = Uitlijning(lok)                                  # stilstaand robot, dwalende GPS: geen spoor om op te passen
+    for k in range(200):
+        lat, lon = lok.naar_ll(k * 0.05, random.gauss(0, 1))
+        u.meting({"fix": True, "lat": lat, "lon": lon}, 0.0, 0.0)
+    assert u.resultaat() is None
+    assert Uitlijning(lok).resultaat() is None and Uitlijning(lok).positie(1, 1) is None
+    assert not u.meting({"fix": False, "lat": 0, "lon": 0}, 0, 0) and not u.meting(None, 0, 0)
+    x, y = enu_naar_robot(*robot_naar_enu(1.5, -2.0, 123.0), 123.0)
+    assert abs(x - 1.5) < 1e-9 and abs(y + 2.0) < 1e-9
+
+
+def test_imu_velden():
+    """De IMU-regel van het robot (17 velden), een regel met extra velden (COMP) en beschadigde regels."""
+    from jaguar.kern.odometrie import imu_velden
+    echt = "#228,YAW,0.03,GYRO,4,-21,11,ACC,-18,0,247,ADC,1270,386,6,2,"
+    assert imu_velden(echt.split(",")) == (228, [4, -21, 11], [-18, 0, 247])
+    comp = "#7,YAW,1.5,GYRO,1,2,3,ACC,4,5,256,COMP,10,20,30,ADC,0,0,0,0,"
+    assert imu_velden(comp.split(",")) == (7, [1, 2, 3], [4, 5, 256])
+    assert imu_velden("#7,GYRO,1,2,3,ACC,4,5,256,COMP,10,20,30".split(",")) == (7, [1, 2, 3], [4, 5, 256])
+    assert imu_velden("#9,Yaw,0.3,Gyro,1,2,3,Accel,4,5,256,Comp,10,20,30,x".split(",")) == (9, [1, 2, 3], [4, 5, 256])
+    for kapot in ("#228,YAW,0.03,GYRO,4,-21,11,ACC,-6,,256,ADC,1,2,3,4,", "#12,YAW,0.1,GYRO,4,-21", "MM0 C=1:2",
+                  "$GPRMC,080457.4,V,5050.51796,N,00419.38C,1274,502,7,2,", "#x,YAW,0,GYRO,1,2,3,ACC,1,2,3,ADC,0,0,0,0,"):
+        assert imu_velden(kapot.split(",")) is None, kapot
+
+
+def test_sim_gps_zin():
+    """De $GPRMC van de gesimuleerde robot heeft een geldige controlesom en geeft de positie terug (ook zuid/west)."""
+    from jaguar.testen.sim_robot import rmc
+    for lat, lon in ((50.8419, 4.3229), (-33.8567, 151.2152), (40.7128, -74.0060)):
+        g = parse_rmc(rmc(lat, lon, 0.77, 123.4))
+        assert g and g["fix"] and abs(g["lat"] - lat) < 2e-7 and abs(g["lon"] - lon) < 2e-7, g
+        assert abs(g["v"] - 0.77) < 0.01 and abs(g["cog"] - 123.4) < 0.06, g
+    assert parse_rmc(rmc(50.0, 4.0, 0, 0, fix=False))["fix"] is False
+
+
 def main():
     for naam, f in sorted(globals().items()):
         if naam.startswith("test_") and callable(f):

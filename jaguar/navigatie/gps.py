@@ -13,6 +13,7 @@ Overal: koers van het robot in graden, 0 = de startrichting, + = links (zoals od
 (bearing) in graden, 0 = noord, 90 = oost, met de klok mee.
 """
 import math
+import threading
 from collections import deque
 
 KT = 0.514444             # m/s per knoop
@@ -266,3 +267,98 @@ class GpsKwaliteit:
         return dict(r, oordeel="slecht", uitleg=f"Slecht: de positie springt tot {spreiding:.0f} m en dwaalt {wegloop:.0f} m weg "
                     "terwijl het robot stilstaat (binnen, of tussen gebouwen of bomen). Gebruik de GPS hier niet; "
                     "de route zelf rijdt op de wielen en de gyro.")
+
+
+class Uitlijning:
+    """Legt het spoor van de odometrie (x vooruit, y links, vanaf de start) op het spoor van de GPS (oost, noord):
+    de best passende draaiing, verschuiving en schaal (kleinste kwadraten over alle metingen).
+
+    Wat dat oplevert, zonder dat het robot snel moet rijden (de koers over de grond is pas boven 1 m/s bruikbaar):
+      - b0: de kompaskoers waarin het robot bij de start keek (het noorden), uit de vorm van het gereden spoor;
+      - schaal: echte meters (GPS) per meter odometrie. 0,97 = het robot rijdt 3 % minder ver dan de wielen tellen
+        (slip, wielstraal); pas betrouwbaar als het spoor veel langer is dan de GPS-fout;
+      - rms: hoe ver de GPS-punten gemiddeld naast het gepaste spoor liggen (m). Klein = rustige GPS; een dwalende
+        GPS (binnen) past op geen enkel spoor en geeft een grote rms;
+      - positie(): de odometrie omgezet naar (oost, noord) met die passing, en naar_odo(): een punt op de kaart
+        omgezet naar het stelsel van de odometrie (daar moet het robot heen rijden).
+    `basis` is de spreiding van het gereden spoor (m): zolang die klein is tegenover de GPS-fout zegt de passing niets.
+    Rechtdoor rijden bepaalt de draaiing en de schaal; de onzekerheid op de koers is ongeveer rms / (basis · √n)."""
+
+    MIN_N = 15
+
+    def __init__(self, lokaal):
+        self.lokaal = lokaal
+        self.n = 0
+        self._s = [0.0] * 10          # Σ px, py, qx, qy, px·qx, py·qy, px·qy, py·qx, |p|², |q|²
+        self._slot = threading.Lock()  # de leesdraad van het robot voegt toe terwijl het rijscript rekent
+        self.laatste = None           # laatste GPS-punt (oost, noord)
+
+    def meting(self, gps, odo_x, odo_y):
+        """Eén GPS-zin (dict van parse_rmc) met de odometriepositie op hetzelfde moment."""
+        if not gps or not gps["fix"]:
+            return False
+        qx, qy = self.lokaal.naar_xy(gps["lat"], gps["lon"])
+        px, py = odo_x, odo_y
+        with self._slot:
+            for k, v in enumerate((px, py, qx, qy, px * qx, py * qy, px * qy, py * qx, px * px + py * py, qx * qx + qy * qy)):
+                self._s[k] += v
+            self.n += 1
+            self.laatste = (qx, qy)
+        return True
+
+    def resultaat(self, met_schaal=True):
+        """dict(b0, schaal, rms, basis, n, onzeker (graden), tx, ty, hoek) of None bij te weinig metingen of een
+        spoor zonder lengte. met_schaal=False past alleen draaiing en verschuiving (schaal 1)."""
+        with self._slot:
+            n, som = self.n, list(self._s)
+        if n < self.MIN_N:
+            return None
+        spx, spy, sqx, sqy, sxx, syy, sxy, syx, spp, sqq = som
+        mpx, mpy, mqx, mqy = spx / n, spy / n, sqx / n, sqy / n
+        a = (sxx + syy) - n * (mpx * mqx + mpy * mqy)         # Σ pc·qc
+        b = (sxy - syx) - n * (mpx * mqy - mpy * mqx)         # Σ pc×qc
+        pp = spp - n * (mpx * mpx + mpy * mpy)
+        qq = sqq - n * (mqx * mqx + mqy * mqy)
+        basis = math.sqrt(max(0.0, pp) / n)
+        if basis < 0.05:
+            return None
+        hoek = math.atan2(b, a)                                # draaiing van het odometriestelsel naar (oost, noord)
+        r = math.hypot(a, b)
+        schaal = r / pp if met_schaal else 1.0
+        rest = qq - 2 * schaal * r + schaal * schaal * pp
+        rms = math.sqrt(max(0.0, rest) / n)
+        c, s = math.cos(hoek), math.sin(hoek)
+        tx = mqx - schaal * (c * mpx - s * mpy)
+        ty = mqy - schaal * (s * mpx + c * mpy)
+        # GPS-fouten hangen in de tijd samen (dwalen): reken met één onafhankelijke meting per 5 s (25 zinnen)
+        onzeker = math.degrees(math.atan2(rms, basis * math.sqrt(max(1.0, n / 25))))
+        return {"b0": (90.0 - math.degrees(hoek)) % 360.0, "schaal": schaal, "rms": rms, "basis": basis, "n": n,
+                "onzeker": onzeker, "tx": tx, "ty": ty, "hoek": hoek}
+
+    @staticmethod
+    def schaal_bruikbaar(res):
+        """De schaal zegt pas iets als het spoor veel langer is dan de GPS-fout (hier: fout op de schaal < 2 %)."""
+        return res is not None and res["basis"] >= 2.0 and res["rms"] / (res["basis"] * math.sqrt(max(1.0, res["n"] / 25))) < 0.02
+
+    def positie(self, odo_x, odo_y, res=None):
+        """(oost, noord) van een odometriepositie volgens de passing; None zolang er geen is."""
+        res = res or self.resultaat()
+        if res is None:
+            return None
+        c, s, k = math.cos(res["hoek"]), math.sin(res["hoek"]), res["schaal"]
+        return res["tx"] + k * (c * odo_x - s * odo_y), res["ty"] + k * (s * odo_x + c * odo_y)
+
+    def naar_odo(self, oost, noord, res=None):
+        """Een punt (oost, noord) in het stelsel van de odometrie volgens de passing; None zolang er geen is."""
+        res = res or self.resultaat()
+        if res is None:
+            return None
+        c, s, k = math.cos(res["hoek"]), math.sin(res["hoek"]), res["schaal"]
+        dx, dy = (oost - res["tx"]) / k, (noord - res["ty"]) / k
+        return c * dx + s * dy, -s * dx + c * dy
+
+
+def enu_naar_robot(oost, noord, b0):
+    """Omgekeerde van robot_naar_enu: (oost, noord) t.o.v. de start -> (x vooruit, y links) bij startrichting b0."""
+    s, c = math.sin(math.radians(b0)), math.cos(math.radians(b0))
+    return oost * s + noord * c, -oost * c + noord * s

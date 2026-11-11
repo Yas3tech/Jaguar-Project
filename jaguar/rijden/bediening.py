@@ -28,10 +28,11 @@ import threading
 import time
 
 from jaguar.live import view as live_view
-from jaguar.navigatie.gps import GpsKwaliteit, checksum_ok, parse_rmc
+from jaguar.navigatie.gps import GpsKwaliteit, Lokaal, checksum_ok, hoek180, parse_rmc, robot_naar_enu
 from jaguar.navigatie.route import boog_naar_stappen
 from jaguar.kern.robot import (BAT_NOOD_V, LOOP, MIN_BATTERY_V, ROBOT_IP, ROBOT_PORT, TURN_TOP, Aborted, BatterijLaag, BatterijLeeg,
                                Jaguar, NaarStart, Obstakel, Stalled, prepare, robot_session)
+from jaguar.rijden.gps_route import GPS_NAUWKEURIG, GpsVolger
 from jaguar.rijden.parcours import STAPPEN, naar_start, rijd
 
 MAX_STAPPEN = 40         # wat de gebruiker opgeeft; een boog telt als één stap
@@ -99,9 +100,20 @@ class Control:
             stappen, power = self._check(raw)
         except ValueError as e:
             return 400, {"fout": str(e)}
-        return self._begin("parcours", stappen, power, (0.0, 0.0, 0.0))
+        return self._begin("parcours", stappen, power, (0.0, 0.0, 0.0), self._kaart(raw.get("start")))
 
-    def _begin(self, soort, stappen, power, oorsprong):
+    @staticmethod
+    def _kaart(start):
+        """{"lat", "lon", "b0"} van de ontwerper (Buiten): waar de start op de kaart ligt en waarheen het robot kijkt.
+        None als het er niet (goed) bij zit: dan rijdt de rit zonder GPS-vergelijking."""
+        getal = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        if not isinstance(start, dict) or not all(getal(start.get(k)) for k in ("lat", "lon", "b0")):
+            return None
+        if not (-90 <= start["lat"] <= 90 and -180 <= start["lon"] <= 180):
+            return None
+        return float(start["lat"]), float(start["lon"]), float(start["b0"]) % 360.0
+
+    def _begin(self, soort, stappen, power, oorsprong, kaart=None):
         """Een rit starten in de achtergrond: "parcours", "terug" (naar de start) of "handmatig"."""
         with self.lock:
             if self.state["bezig"]:
@@ -112,7 +124,7 @@ class Control:
             view = live_view.LiveView("")
             self.hub.view = view          # de pagina schakelt naar de nieuwe rit
             self.state = {"bezig": True, "soort": soort, "resultaat": None, "fout": None}
-            self.thread = threading.Thread(target=self._run, args=(view, soort, stappen, power, oorsprong), daemon=True)
+            self.thread = threading.Thread(target=self._run, args=(view, soort, stappen, power, oorsprong, kaart), daemon=True)
             self.thread.start()
         if stappen:
             print(f"Rit ({soort}) vanaf de pagina: " + ", ".join(" ".join(f"{w:g}" if not isinstance(w, str) else w for w in st)
@@ -169,7 +181,31 @@ class Control:
             raise ValueError(f"Vermogen moet tussen 50 en {MAX_POWER} liggen.")
         return stappen, power
 
-    def _run(self, view, soort, stappen, power, oorsprong):
+    @staticmethod
+    def _gps_vergelijking(robot, volger, kaart, eind):
+        """Na een rit die op de kaart getekend is: waar staat het robot volgens de GPS, tegenover het einde van de
+        route? En past het GPS-spoor op het gereden spoor (dan klopten het startpunt en de richting op de kaart)?"""
+        lat, lon, b0 = kaart
+        if volger.fixes == 0:
+            return "GPS: geen positie ontvangen; de rit reed op de wielen en de gyro."
+        doel = robot_naar_enu(eind[0], eind[1], b0)                 # (oost, noord) vanaf het startpunt op de kaart
+        nu = volger.gemiddelde(10)[0]
+        tekst = ("GPS na de rit: {:.6f}, {:.6f}".format(*volger.lokaal.naar_ll(*nu))
+                 + f", {math.hypot(nu[0] - doel[0], nu[1] - doel[1]):.1f} m van het einde van de route op de kaart")
+        res, _, _ = volger.beste()
+        if res is None or res["basis"] < 1.0:
+            return tekst + " (route te kort om het GPS-spoor te vergelijken)."
+        tekst += f". Het GPS-spoor past binnen {res['rms']:.1f} m op het gereden spoor"
+        if res["onzeker"] <= 5.0:
+            verschil = hoek180(res["b0"] - b0)
+            tekst += (f"; volgens het spoor keek het robot bij de start naar {res['b0']:.0f}°"
+                      + (f" (op de kaart: {b0:.0f}°, {abs(verschil):.0f}° verschil: zet de richting bij de start juister)"
+                         if abs(verschil) > max(5.0, 2 * res["onzeker"]) else " (klopt met de kaart)"))
+        elif res["rms"] > GPS_NAUWKEURIG:
+            tekst += ": te ruw om de richting te controleren (gewone GPS, korte route)"
+        return tekst + "."
+
+    def _run(self, view, soort, stappen, power, oorsprong, kaart=None):
         a = self.args
         result, error = "klaar", None
         robot = None
@@ -179,12 +215,15 @@ class Control:
                 self.robot = robot
                 robot.stop_requested = self.stop_requested     # STOP tijdens het verbinden
                 robot.batterij_terug = soort == "terug"        # naar de start rijden mag tot BAT_NOOD_V
+                volger = GpsVolger(robot, Lokaal(kaart[0], kaart[1])) if kaart else None
                 prepare(robot, a.rest, min_v=BAT_NOOD_V if soort == "terug" else MIN_BATTERY_V)
                 try:
                     if soort == "handmatig":
                         self._handmatig(robot)
                     else:
-                        rijd(robot, stappen, power, prefix="terug-" if soort == "terug" else "")
+                        eind = rijd(robot, stappen, power, prefix="terug-" if soort == "terug" else "")
+                        if volger is not None:
+                            robot.melding(self._gps_vergelijking(robot, volger, kaart, eind))
                 except NaarStart as e:
                     if soort == "handmatig" and isinstance(e, BatterijLaag):
                         robot.melding(f"{e}: handmatig rijden gestopt. Terug naar start kan nog (tot {BAT_NOOD_V:.1f} V).")

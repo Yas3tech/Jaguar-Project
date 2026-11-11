@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from jaguar.analyse.rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT, WHEEL_DIS
+from jaguar.kern.odometrie import imu_velden
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -120,11 +121,11 @@ class LiveView:
             pass              # kapotte regel (twee berichten aan elkaar): staat wel in de CSV
 
     def _imu(self, t, phase, power, p):
-        if len(p) != 17 or p[3] != "GYRO" or p[7] != "ACC":
+        velden = imu_velden(p)
+        if velden is None:
             return
-        seq = int(p[0][1:])
-        g = [int(v) for v in p[4:7]]
-        a = [int(v) / ACC_LSB_G for v in p[8:11]]
+        seq, g = velden[0], velden[1]
+        a = [v / ACC_LSB_G for v in velden[2]]
         if phase == "rust":
             self.rest_gz.append(g)
         elif self.bias is None and self.rest_gz:

@@ -1015,7 +1015,7 @@ $("ds-nee").onclick = () => $("dlg-start").close();
 $("ds-ja").onclick = async () => {
   $("ds-ja").disabled = true; $("ds-fout").textContent = "starten…";
   try {
-    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stappen: P.stappen, power: S.power, bogen: S.bogen }) });
+    const r = await fetch("/rit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stappen: P.stappen, power: S.power, bogen: S.bogen, ...(S.modus === "buiten" ? { start: { lat: naarLL(S.pts[0].x, S.pts[0].y)[0], lon: naarLL(S.pts[0].x, S.pts[0].y)[1], b0: S.b0 } } : {}) }) });
     const a = await r.json(); if (!r.ok) throw new Error(a.fout || `HTTP ${r.status}`);
     $("dlg-start").close(); parent.postMessage({ type: "rit-gestart" }, "*"); melding("rit gestart");
   } catch (e) { $("ds-fout").textContent = e instanceof TypeError ? "Geen verbinding met bediening.py (start: python -m jaguar.rijden.bediening)." : e.message; $("ds-ja").disabled = false; }

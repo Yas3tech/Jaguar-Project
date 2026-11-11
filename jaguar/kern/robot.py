@@ -23,12 +23,19 @@ import math
 import os
 import socket
 import statistics
+import sys
 import threading
 import time
 
 from jaguar.analyse.rit import M_PER_CNT, WHEEL_R, WHEEL_DIS, GYRO_LSB_DPS, ACC_LSB_G
-from jaguar.kern.odometrie import Odometrie
+from jaguar.kern.odometrie import Odometrie, imu_velden
 from jaguar.navigatie.gps import parse_rmc
+
+# Een teken dat de console niet kent (bv. een pijl in een melding) mag nooit een rit laten crashen.
+try:
+    sys.stdout.reconfigure(errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 ROBOT_IP = "192.168.0.60"
 ROBOT_PORT = 10001
@@ -45,7 +52,14 @@ CAM_MAX_AGE = 1.5         # s: ouder camerabeeld = obstakeldetectie blind = niet
 CAM_LATENCY = 0.4         # s: camera + wifi; zo ver rijdt de robot al voor hij het beeld ziet
 FAULT_ESTOP = 16          # FF-bit 4 = emergency stop
 K_V = 0.0031              # m/s per vermogenseenheid op vlakke grond (uit ritten: 150 → 0,46 m/s); wordt bijgeleerd
-APPROACH_MARGIN = 0.02   # vloeiend rijden stopt 2 cm voor het doel; de rest gaat met kruipstoten
+APPROACH_MARGIN = 0.02   # alleen met --precies: vloeiend rijden stopt 2 cm voor het doel; de rest gaat met kruipstoten
+# Rijden in één beweging (standaard): het vermogen gaat uit zodra de rest van de weg gelijk is aan wat het robot nog
+# uitrolt (snelheid × UITLOOP, bijgeleerd na elke stop). Staat het robot daarna binnen de tolerantie of voorbij het
+# doel, dan is de stap klaar: het rijdt niet achteruit om een paar centimeter goed te maken. Staat het te kort, dan
+# rijdt het nog een stukje vooruit (hoogstens BIJRIJDEN keer). Alleen een overschot boven OVERSCHOT_MAX wordt teruggereden.
+UITLOOP = 0.20            # s: uitrollen na vermogen 0 (afstand = snelheid × UITLOOP); wordt bijgeleerd
+BIJRIJDEN = 2
+OVERSCHOT_MAX = 0.10      # m
 # Positieregeling in de motordrivers (Roboteq, MMOD 3): de driver brengt elk wiel op de puls nauwkeurig
 # naar een absoluut doel (1000x per seconde); het PC-programma houdt tot dan de koers met de gyro.
 # Gemeten: 1 m en 5 m heen en terug binnen 2 tot 6 pulsen (6 tot 17 mm) per wiel. Alleen voor het laatste
@@ -65,7 +79,8 @@ ARC_KOERS_FRAC = 0.35     # deel van het vermogen dat de koersregeling (PID) ext
 ARC_LEAD = 0.3            # s: de boog stopt zoveel vroeger als het robot nog uitrolt (snelheid × tijd), net als bij draaien
 ARC_MIN_RADIUS = 0.5      # m: kleiner kan niet zonder dat de binnenste wielen achteruit moeten
 DRIVER_FABRIEK = {"KP": 30, "KI": 10, "KD": 0, "MXPF": 100, "MXPR": 100, "MMOD": 0}
-STALL_S = 1.5             # zo lang < 15 % van de verwachte snelheid bij vol vermogen = vastgelopen
+STALL_S = 1.5             # zo lang onder STALL_FRAC van de verwachte snelheid bij vol vermogen = vastgelopen
+STALL_FRAC = 0.30
 IMU_HZ = 50.0
 # PID-koersregelaar: uitgang = vermogensverschil links/rechts (+ = rechts sneller = naar links)
 KP_HEADING = 6.0          # per graad koersfout
@@ -80,10 +95,13 @@ ODO_ALARM_S = 1.0         # zo lang "onzeker" of "wielen in de lucht" tijdens he
 TURN_TOP = 380            # draaien ter plaatse: maximaal vermogensverschil …
 TURN_MIN = 220            # … en minimum om de wrijving van skid-steer te overwinnen (wordt bijgeleerd)
 TURN_K = 6.0              # vermogen per graad resterende hoek
-TURN_LEAD = 0.25          # s: uitloop na vermogen 0, voorspeld met de draaisnelheid
+TURN_LEAD = 0.25          # s: uitloop na vermogen 0, voorspeld met de draaisnelheid (wordt bijgeleerd)
 TURN_TOL = 1.0            # graden: einde van de vloeiende draai (met voorspelde uitloop)
-EINDKOERS_TOL = 1.0       # graden: grotere koersfout na een segment wordt ter plaatse rechtgezet
-TURN_FINE = 0.4           # graden: eindtolerantie na het nadraaien met korte stoten
+EINDKOERS_TOL = 1.5       # graden: grotere koersfout na een segment wordt ter plaatse rechtgezet
+# Eindtolerantie van een draai. Binnen TURN_FINE volgt geen draaistoot meer: de koers is absoluut (fouten stapelen
+# niet op) en het volgende rechte stuk stuurt een graad vanzelf weg. Met --precies: nadraaien tot TURN_FINE_PRECIES.
+TURN_FINE = 1.0
+TURN_FINE_PRECIES = 0.4
 TURN_TRIES = 10
 TURN_MIN_PULSE = 0.04     # s: kortste draaistoot
 TURN_RATIO_ALARM = 0.15   # gyro/encoders: meer dan 15 % anders dan de vorige draai = melding
@@ -124,6 +142,11 @@ class Obstakel(RuntimeError):
     kort de stap in; de andere rijscripts stoppen de rit."""
 
 
+class Vastgelopen(Obstakel):
+    """Een rechte stap van een parcours liep vast (tegen iets aan, wielen slippen): het parcours stopt hier, want
+    de volgende stappen kloppen niet meer met waar het robot staat."""
+
+
 class CameraWeg(Obstakel):
     """Geen vers camerabeeld terwijl de obstakeldetectie aan staat: blind, dus de rit stopt."""
 
@@ -147,6 +170,9 @@ class PID:
 
 
 class Jaguar:
+    vast = None
+    creep, precies, uitloop, turn_lead = 60, False, UITLOOP, TURN_LEAD   # ook voor afgeleide klassen zonder __init__ (sim_boog)
+
     def __init__(self, ip=ROBOT_IP, port=ROBOT_PORT, writer=None, achter_vrij=False, live=None, driver=None):
         self.writer = writer
         self.live = live      # live weergave (live.view / mqtt_stream): krijgt elke ontvangen regel
@@ -171,6 +197,10 @@ class Jaguar:
         self._bat = deque()   # (perf_counter, spanning) over BAT_VENSTER_S
         self.k_v = K_V
         self.jog_gain = 0.08  # m per seconde kruipstoot; wordt bijgeleerd
+        self.uitloop = UITLOOP
+        self.turn_lead = TURN_LEAD
+        self.precies = False  # True (--precies): stoppen op de millimeter met kruipstoten en de driverpositie, heen en weer
+        self.creep = 60
         # Afstand, koers (graden, + = links) en zijdelingse afwijking (m, + = links) t.o.v. de
         # startlijn; koers en IMU-correcties pas na zero_heading() in rust.
         self.odo = Odometrie(M_PER_CNT, GYRO_LSB_DPS, ACC_LSB_G, WHEEL_DIS)
@@ -190,6 +220,8 @@ class Jaguar:
         self._imu_since_enc = False
         self._t_last_enc = None
         self._enc_new = set()
+        self._enc_eerste = None          # (driver, tijd) van het eerste encoderpakket
+        self._enkel_driver = None        # maar één driver meldt encoders (simulator): zijn waarden tellen voor beide
         # Driver-positie alleen op de echte robot (de nep-robot kent de commando's niet) en niet met vrije achterwielen.
         local = ip in ("127.0.0.1", "localhost")
         self.driver = (not local and not achter_vrij and os.environ.get("JAGUAR_DRIVER") != "0") if driver is None else driver
@@ -332,15 +364,19 @@ class Jaguar:
         self.note(line)
         if self.live is not None:
             self.live.feed(time.perf_counter() - self.t0, self.phase, self.power, line)
-        if line.startswith("$GPRMC") and self.gps_hook is not None:
+        if line.startswith("$GPRMC"):
             gps = parse_rmc(line)
             if gps:
-                self.gps_hook(gps, self.odo.koers, self.odo.draaisnelheid, self.odo.x, self.odo.y)
+                if gps["fix"]:
+                    self.odo.gps(self._clock, gps["v"])      # tweede mening: rijdt het robot echt?
+                if self.gps_hook is not None:
+                    self.gps_hook(gps, self.odo.koers, self.odo.draaisnelheid, self.odo.x, self.odo.y)
             return
         if line.startswith("#"):
             p = line.split(",")
-            if len(p) == 17 and p[3] == "GYRO" and p[7] == "ACC":
-                self._imu(int(p[0][1:]), [int(v) for v in p[4:7]], [int(v) for v in p[8:11]])
+            velden = imu_velden(p)
+            if velden is not None:
+                self._imu(*velden)
             return
         parts = line.split(" ", 1)
         if len(parts) != 2 or parts[0] not in ("MM0", "MM1"):
@@ -356,6 +392,17 @@ class Jaguar:
             self.encoder[board] = tuple(int(v) for v in value[2:].split(":"))
             self.enc_t[board] = time.perf_counter()
             self._enc_new.add(board)
+            # De robot heeft twee drivers (MM0 voor, MM1 achter). Meldt er na 1 s maar één encoders (een simulator
+            # die alleen MM0 stuurt), dan tellen zijn waarden voor beide; anders rijdt er niets.
+            if self._enc_eerste is None:
+                self._enc_eerste = (board, time.perf_counter())
+            ander = "MM1" if board == "MM0" else "MM0"
+            if self._enkel_driver is None and ander not in self.encoder and time.perf_counter() - self._enc_eerste[1] > 1.0:
+                self._enkel_driver = board
+                print(f"Alleen {board} meldt encoders: zijn waarden tellen ook voor {ander}.")
+            if self._enkel_driver == board:
+                self.encoder[ander], self.enc_t[ander] = self.encoder[board], self.enc_t[board]
+                self._enc_new.add(ander)
             if {"MM0", "MM1"} <= self._enc_new:           # beide drivers: één odometriestap
                 self._enc_new.clear()
                 now = time.perf_counter()
@@ -415,7 +462,7 @@ class Jaguar:
     # weer met de standaardwaarden begint (die hangen van batterij en ondergrond af). Binnen de
     # grenzen: een vastgelopen sessie mag geen onzin bewaren.
     GRENZEN = {"k_v": (0.0015, 0.006), "jog_gain": (0.02, 0.5), "turn_min": (100, TURN_TOP),
-               "turn_gain": (10.0, 200.0)}
+               "turn_gain": (10.0, 200.0), "uitloop": (0.05, 1.0), "turn_lead": (0.05, 0.8)}
 
     def _leerwaarden_laden(self):
         try:
@@ -502,7 +549,7 @@ class Jaguar:
             while True:
                 now = time.perf_counter()
                 err = target - self.heading
-                ahead = err - self.yaw_rate * TURN_LEAD
+                ahead = err - self.yaw_rate * self.turn_lead
                 if abs(ahead) <= TURN_TOL or ahead * err < 0:
                     break
                 if now - t0 > timeout:
@@ -517,13 +564,20 @@ class Jaguar:
                     self.turn_min, moved_at = min(top, self.turn_min + 20), now
                 self._spin(math.copysign(p, err))
                 time.sleep(LOOP)
+            koers_uit, rate_uit = self.heading, self.yaw_rate
             self._motor(0)
-            for _ in range(TURN_TRIES):                      # nadraaien met korte stoten, tot TURN_FINE
+            self._settle_turn()
+            if abs(rate_uit) > 10:                           # uitloop bijleren: zoveel draaide hij nog na vermogen 0
+                lead = (self.heading - koers_uit) / rate_uit
+                if 0 <= lead < 1.5:
+                    self.turn_lead = min(0.8, max(0.05, 0.6 * self.turn_lead + 0.4 * lead))
+            fijn = TURN_FINE_PRECIES if self.precies else TURN_FINE
+            for _ in range(TURN_TRIES):                      # nadraaien met korte stoten, alleen als de fout groter is dan `fijn`
                 self._settle_turn()
                 err = target - self.heading
                 # Een stoot is minstens TURN_MIN_PULSE s; is de fout kleiner dan de helft daarvan, dan
                 # maakt nog een stoot het slechter (heen en weer slingeren).
-                if abs(err) <= max(TURN_FINE, 0.5 * self.turn_gain * TURN_MIN_PULSE):
+                if abs(err) <= max(fijn, 0.5 * self.turn_gain * TURN_MIN_PULSE):
                     break
                 pulse = min(0.4, max(TURN_MIN_PULSE, abs(err) / self.turn_gain))
                 before, t1 = self.heading, time.perf_counter()
@@ -768,14 +822,17 @@ class Jaguar:
         kruipstoten die telkens in stilstand gemeten worden, tot de fout binnen `tolerance` m ligt.
         Geeft de gemeten verplaatsing (m, met teken) terug."""
         self._wait_encoders()
+        self.vast = None
         sign = 1 if power >= 0 else -1
-        self.creep = max(creep, getattr(self, "creep", creep))
+        self.creep = max(creep, self.creep)
         start = self._settled()
         corr0, unc0 = self.odo.gecorrigeerd, self.odo.onzekerheid
         goal = start + sign * distance
         self.note(f"DOEL {self.phase} {sign * distance:.4f} r={WHEEL_R:.5f}")
         try:
-            if self.driver and self.odo.klaar:
+            if not self.precies:
+                self._in_een_keer(goal, sign, abs(power), ramp, brake, tolerance)
+            elif self.driver and self.odo.klaar:
                 self._drive_with_driver(goal, sign, power, ramp, brake, tolerance)
             else:
                 self._approach(goal - sign * APPROACH_MARGIN, abs(power), ramp, brake)
@@ -784,6 +841,7 @@ class Jaguar:
             self._motor(0)
             print(f"{self.phase}: VASTGELOPEN - {e}. Segment afgebroken.")
             self.note(f"VAST {self.phase}")
+            self.vast = str(e)
         except (Onderbroken, Obstakel):
             # Het stuk tot hier telt als gereden; de analyse telt de delen van een stap samen.
             self.note(f"STOP {self.phase} {self._settled() - start:.4f}")
@@ -837,7 +895,7 @@ class Jaguar:
                 target = start_heading + angle * frac
                 remaining = length - dist
                 p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
-                p_brake = max(self.creep if hasattr(self, "creep") else 60, math.sqrt(2 * ARC_BRAKE * remaining) / self.k_v)
+                p_brake = max(self.creep, math.sqrt(2 * ARC_BRAKE * remaining) / self.k_v)
                 p = int(min(top, p_ramp, p_brake))
                 if p >= 0.9 * top and now - t0 > 2.0 and now - moved_at > STALL_S:
                     raise Stalled(f"{abs(self.odo.v):.2f} m/s bij vermogen {p} in de boog")
@@ -878,8 +936,31 @@ class Jaguar:
                 print(f"{self.phase}: driverpositie mislukt ({e}); verder met kruipstoten.")
         self._jog(goal, abs(power), tolerance)       # corrigeert alleen wat de driver nog overlaat (> tolerance)
 
-    def _approach(self, goal, top, ramp, brake):
-        """Eén vloeiende rijbeweging tot vlak voor `goal`."""
+    def _in_een_keer(self, goal, sign, top, ramp, brake, tolerance):
+        """Naar `goal` in één vloeiende beweging: optrekken, rijden, afremmen en het vermogen uit op het moment dat
+        de uitloop het robot precies op het doel brengt. Geen kruipstoten en niet achteruit voor een klein overschot
+        (zie UITLOOP hierboven)."""
+        for poging in range(1 + BIJRIJDEN):
+            eerste = poging == 0
+            pos_uit, v_uit = self._approach(goal, top if eerste else min(top, self.creep + 40), ramp if eerste else 0.3,
+                                            brake, uitloop=self.uitloop)
+            pos = self._settled()
+            if abs(v_uit) > 0.05:                            # uitloop bijleren: zo ver rolde hij nog na vermogen 0
+                gemeten = sign * (pos - pos_uit) / abs(v_uit)
+                if 0 <= gemeten < 2:
+                    self.uitloop = min(1.0, max(0.05, 0.3 * self.uitloop + 0.7 * gemeten))
+            rest = sign * (goal - pos)
+            if rest <= tolerance:                            # op het doel, of voorbij
+                break
+            self.note(f"BIJRIJDEN {self.phase} {rest:.4f}")
+        if -rest > max(OVERSCHOT_MAX, 5 * tolerance):        # ver voorbij (helling, geduwd): dat wel terugrijden
+            print(f"{self.phase}: {-rest * 100:.0f} cm voorbij het doel: terugrijden.")
+            self.note(f"TERUGZETTEN {self.phase} {-rest:.4f}")
+            self._approach(goal, min(top, self.creep + 40), 0.3, brake, uitloop=self.uitloop)
+
+    def _approach(self, goal, top, ramp, brake, uitloop=0.0):
+        """Eén vloeiende rijbeweging tot `goal`; met `uitloop` (s) gaat het vermogen al uit op snelheid × uitloop
+        voor het doel. Geeft de positie en de snelheid op het moment dat het vermogen uitging."""
         pos = self.odo.positie()
         direction = 1 if goal >= pos else -1
         t0, last_n = time.perf_counter(), self.odo.n_enc
@@ -894,15 +975,19 @@ class Jaguar:
             pos, v = self.odo.positie(), self.odo.v
             if self.odo.n_enc != last_n:                     # nieuw encoderpakket (≈ 5 Hz)
                 last_n = self.odo.n_enc
-                if p >= 0.9 * top and abs(v) > 0.05:        # verband vermogen → snelheid bijleren
+                # verband vermogen → snelheid bijleren; niet van een robot dat nauwelijks vooruitkomt (tegen een
+                # obstakel): dan leerde het dat traag rijden normaal is en zag het nooit meer dat het vastzat
+                if p >= 0.9 * top and abs(v) > 0.5 * K_V * p:
                     self.k_v = 0.8 * self.k_v + 0.2 * abs(v) / p
             if abs(pos - moved_pos) >= M_PER_CNT:
                 moved_at, moved_pos = now, pos
             remaining = direction * (goal - pos)
-            if remaining <= 0:
+            if remaining <= abs(v) * uitloop:
                 break
             p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
-            p_brake = max(self.creep, math.sqrt(2 * brake * remaining) / self.k_v)
+            # Remmen naar het punt waar het vermogen uitgaat (de uitloop telt mee): trage motoren lopen achter op het
+            # gevraagde vermogen, en zo rijdt het robot toch al op kruipsnelheid als het daar aankomt.
+            p_brake = max(self.creep, math.sqrt(2 * brake * max(0.0, remaining - abs(v) * uitloop)) / self.k_v)
             if direction > 0 and self.obstacle is not None:   # op tijd afremmen voor wat de camera ziet
                 room = self._obstacle_room()
                 if room is not None:
@@ -914,7 +999,8 @@ class Jaguar:
                 self.jog_gain *= 1.5
                 moved_at = now
             # Vol vermogen maar (bijna) geen beweging: vastgelopen of op een obstakel.
-            if p >= 0.9 * top and abs(v) < 0.15 * self.k_v * p:
+            # (30 %: tegen een obstakel malen de wielen nog op 14 % van de snelheid, gezien in de websimulator)
+            if p >= 0.9 * top and abs(v) < STALL_FRAC * max(self.k_v, 0.6 * K_V) * p:
                 slow_since = slow_since or now
                 if now - slow_since > STALL_S:
                     raise Stalled(f"{abs(v):.2f} m/s bij vermogen {p}")
@@ -924,6 +1010,7 @@ class Jaguar:
             self._motor(direction * p, self._steer(direction * p))
             time.sleep(LOOP)
         self._motor(0)
+        return pos, v
 
     def _jog(self, goal, top, tolerance, tries=10):
         """Korte kruipstoten tot binnen `tolerance`; elke stoot wordt in stilstand nagemeten
@@ -1126,8 +1213,11 @@ def add_drive_args(ap, distance):
     how.add_argument("--duration", type=positive_seconds, help="seconden rijden in plaats van een afstand")
     ap.add_argument("--ramp", type=float, default=1.5, help="seconden om van 0 naar het volle vermogen te gaan")
     ap.add_argument("--creep", type=int, default=60, help="kruipvermogen vlak voor het doel")
-    ap.add_argument("--tolerance", type=float, default=3.0, help="toegelaten stopfout in mm (min. ±1 encoderpuls ca. 2,8 mm)")
-    ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
+    ap.add_argument("--tolerance", type=float, default=10.0, help="toegelaten stopfout in mm (1 encoderpuls is ca. 2,8 mm)")
+    ap.add_argument("--precies", action="store_true",
+                    help="stoppen op de millimeter met kruipstoten (en de driverpositie op de echte robot): het robot "
+                         "rijdt dan aan het eind in stukjes, ook achteruit. Standaard: één vloeiende beweging")
+    ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = sim_robot.py of de brug van de websimulator")
     ap.add_argument("--port", type=int, default=ROBOT_PORT)
     ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True, help="live weergave in de browser (standaard aan)")
     ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=True,
@@ -1139,6 +1229,7 @@ def add_drive_args(ap, distance):
 
 def run_segment(robot, args, power):
     """Rijrichting = teken van power × teken van distance; zo werkt zowel --power -250 als --distance -3."""
+    robot.precies = getattr(args, "precies", False)
     if args.duration:
         robot.drive(power, args.duration, args.ramp)
     else:

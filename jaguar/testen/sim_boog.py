@@ -100,6 +100,7 @@ def proef(radius, hoek, spoor_echt=1.4, ratio=None):
 
 
 def main():
+    sys.stdout.reconfigure(errors="replace")   # een → mag de test niet laten crashen in een console zonder dat teken
     gevallen = [(2.0, 90, 1.4), (1.5, -90, 1.4), (1.0, 180, 1.4), (3.0, 45, 1.4),
                 (2.0, 90, 0.9), (2.0, 90, 2.0), (0.8, 90, 1.4)]
     slecht = 0
