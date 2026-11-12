@@ -32,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PAGE = HERE / "pagina.html"
 DESIGNER = HERE / "ontwerp.html"
+DEMO_KAART = HERE / "demo_kaart.html"
 DASHBOARD = ROOT / "dashboard" / "dashboard.html"   # geschreven door rit.py
 OPTIONS_FILE = HERE / "opties.json"   # bewaard tussen de ritten
 # Axis-camera op de robot (docs/robot/Notes.txt); vraagt Digest-login, dus de server stuurt het beeld door.
@@ -369,6 +370,13 @@ def _handler(hub):
                 if not DASHBOARD.exists():
                     return self.send_error(404, "Nog geen dashboard: klik eerst op Analyse.")
                 return self._send(200, "text/html; charset=utf-8", DASHBOARD.read_bytes())
+            if path == "/kaart":       # kaart van de demo-simulatie (bediening.py --demo)
+                return self._send(200, "text/html; charset=utf-8", DEMO_KAART.read_bytes())
+            if path == "/sim.json":
+                stand = hub.control.sim_stand() if hub.control is not None else None
+                if stand is None:
+                    return self._json(404, {"fout": "Geen demo-simulatie: start met python -m jaguar.rijden.bediening --demo."})
+                return self._json(200, stand)
             if path == "/ontwerp":
                 return self._send(200, "text/html; charset=utf-8", DESIGNER.read_bytes())
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())   # ook /options: opent het opties-venster

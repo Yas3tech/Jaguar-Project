@@ -60,7 +60,8 @@ def rechtuit(sim, robot, meter, power=250, **kw):
 
 
 def test_vijf_meter_in_een_keer():
-    with simulatie() as (sim, poort), robot_op(poort) as robot:
+    # rustmeting van 3 s zoals de rijscripts: met 1 s is de gyrobias te ruw voor 5 cm over 10 m (gezien: 0,7 tot 5,2 cm)
+    with simulatie() as (sim, poort), robot_op(poort, rust=3.0) as robot:
         d, terug, stops = rechtuit(sim, robot, 5.0)
         assert terug < 0.002, f"{terug * 100:.1f} cm achteruit gereden"
         assert stops == 1, f"{stops} keer gestopt in plaats van 1"
@@ -109,6 +110,21 @@ def test_vierkant():
         assert d < 0.10 and h < 3.0, f"{d * 100:.1f} cm en {h:.1f}° van de start"
         assert sim.achteruit_m < 0.03, f"{sim.achteruit_m * 100:.1f} cm achteruit gereden in het vierkant"
     return f"8 m vierkant: {d * 100:.1f} cm en {h:.1f}° van de start, {sim.achteruit_m * 100:.1f} cm achteruit"
+
+
+def test_pad_zonder_stoppen():
+    """Een lus met bogen: de rechte stukken en bogen die op elkaar volgen rijdt het robot als één pad. Het staat
+    alleen stil voor de twee draaien ter plaatse en aan het einde: 2 keer stoppen in 22 m, en terug op de start."""
+    lus = [("vooruit", 5.0), ("boog", 2.0, 90.0), ("vooruit", 3.0), ("links", 90.0),
+           ("vooruit", 5.0), ("boog", 2.0, 90.0), ("vooruit", 3.0), ("links", 90.0)]
+    with simulatie() as (sim, poort), robot_op(poort) as robot:
+        sim.tellers_nul()
+        rijd(robot, lus, pause=0.3)
+        d, h = math.hypot(sim.x, sim.y), abs(hoek(sim.h))
+        assert sim.stops == 2, f"{sim.stops} keer gestopt in plaats van 2"
+        assert d < 0.20 and h < 3.0, f"{d * 100:.1f} cm en {h:.1f}° van de start"
+        assert sim.achteruit_m < 0.03, f"{sim.achteruit_m * 100:.1f} cm achteruit gereden"
+    return f"lus van 22 m met 2 bogen: {sim.stops} stops, {d * 100:.1f} cm en {h:.1f}° van de start"
 
 
 def test_heen_en_terug():

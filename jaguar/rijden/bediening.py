@@ -25,6 +25,7 @@ import argparse
 import math
 import sys
 import threading
+from pathlib import Path
 import time
 
 from jaguar.live import view as live_view
@@ -93,6 +94,10 @@ class Control:
         self.gps_meting = None
         self.gps_fout = None
         self.gps_gevraagd = 0.0
+        self.sim = getattr(args, "demo_sim", None)   # de gesimuleerde robot van --demo (voor de kaart)
+        self.sim_plan, self.sim_odo, self.sim_start = [], [], (0.0, 0.0, 0.0)
+        if self.sim is not None:                     # de odometrie van de lopende rit bijhouden, ook zonder open kaart
+            threading.Thread(target=self._sim_volg, daemon=True).start()
 
     def start(self, raw):
         """raw = {"stappen": [["vooruit", 1.0], ...], "power": 250}; geeft (HTTP-status, antwoord)."""
@@ -113,11 +118,67 @@ class Control:
             return None
         return float(start["lat"]), float(start["lon"]), float(start["b0"]) % 360.0
 
+    def sim_stand(self):
+        """Voor de kaart van de demo-simulatie (/sim.json): terrein, de gevraagde route, waar het robot echt reed en
+        waar het denkt te rijden. Alles in meters vanaf de allereerste start (x = oost, y = noord)."""
+        sim = self.sim
+        if sim is None:
+            return None
+        oost, noord = robot_naar_enu(sim.x, sim.y, sim.richting)
+        zones = [{"soort": soort, "r": r, **dict(zip("xy", (round(w, 3) for w in robot_naar_enu(zx, zy, sim.richting))))}
+                 for soort, zx, zy, r in sim.terrein]
+        gereden = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(sim.gereden, sim.gereden[1:]))
+        return {"zones": zones, "plan": self.sim_plan, "echt": sim.gereden[-3000:], "odo": self.sim_odo[-3000:],
+                "robot": [round(oost, 3), round(noord, 3), round((sim.richting - sim.h) % 360, 1)],
+                "grond": sim.grond, "gereden": round(gereden, 2), "bezig": self.state["bezig"]}
+
+    def _sim_volg(self):
+        """Vijf keer per seconde: waar het robot volgens zijn odometrie staat, omgerekend naar de kaart (de
+        odometrie telt vanaf de start van de lopende rit)."""
+        while True:
+            time.sleep(0.2)
+            robot, sim = self.robot, self.sim
+            if robot is None or not robot.odo.klaar or not self.state["bezig"] or robot.phase in ("rust", "vrijgeven"):
+                continue
+            sx, sy, sh = self.sim_start
+            c, s = math.cos(math.radians(sh)), math.sin(math.radians(sh))
+            p = robot_naar_enu(sx + c * robot.odo.x - s * robot.odo.y, sy + s * robot.odo.x + c * robot.odo.y, sim.richting)
+            if not self.sim_odo or math.hypot(p[0] - self.sim_odo[-1][0], p[1] - self.sim_odo[-1][1]) > 0.03:
+                self.sim_odo.append((round(p[0], 3), round(p[1], 3)))
+
+    def _sim_rit(self, stappen):
+        """Bij het begin van een rit in de demo: waar het robot nu echt staat is de start, en de gevraagde route
+        (rechte stukken, draaien en bogen) wordt van daaruit uitgetekend."""
+        sim = self.sim
+        self.sim_start = (sim.x, sim.y, sim.h)
+        self.sim_odo = []
+        x, y, h = sim.x, sim.y, math.radians(sim.h)
+        pts = [(x, y)]
+        for st in stappen or []:
+            if st[0] in ("vooruit", "achteruit"):
+                d = float(st[1]) * (1 if st[0] == "vooruit" else -1)
+                x, y = x + d * math.cos(h), y + d * math.sin(h)
+                pts.append((x, y))
+            elif st[0] in ("links", "rechts"):
+                h += math.radians(float(st[1])) * (1 if st[0] == "links" else -1)
+            elif st[0] == "boog":
+                r, a = float(st[1]), math.radians(float(st[2]))
+                kant = 1 if a > 0 else -1
+                mx, my = x - kant * r * math.sin(h), y + kant * r * math.cos(h)
+                for k in range(1, 25):
+                    b = h + a * k / 24
+                    pts.append((mx + kant * r * math.sin(b), my - kant * r * math.cos(b)))
+                h += a
+                x, y = pts[-1]
+        self.sim_plan = [tuple(round(w, 3) for w in robot_naar_enu(px, py, sim.richting)) for px, py in pts]
+
     def _begin(self, soort, stappen, power, oorsprong, kaart=None):
         """Een rit starten in de achtergrond: "parcours", "terug" (naar de start) of "handmatig"."""
         with self.lock:
             if self.state["bezig"]:
                 return 409, {"fout": "Er loopt al een rit."}
+            if self.sim is not None:
+                self._sim_rit(stappen)
             self._gps_stoppen()            # één verbinding met het robot tegelijk
             self.stop_requested = False
             self.power = power
@@ -140,6 +201,7 @@ class Control:
         r["gepauzeerd"] = bool(robot is not None and robot.pause_requested)
         r["terug_gevraagd"] = bool(robot is not None and robot.terug_requested)
         r["thuis"] = None
+        r["demo"] = getattr(self.args, "demo_naam", None)     # de pagina toont dan "DEMO SIMULATIE"
         if not r["bezig"] and self.thuis is not None:
             stappen = naar_start(*self.thuis)
             if stappen:
@@ -456,6 +518,31 @@ class Control:
                 self.thread.join(10)
 
 
+DEMO_TERREIN = Path(__file__).resolve().parents[2] / "testdata" / "terrein_demo.json"
+DEMO_SPOOR = Path(__file__).resolve().parents[2] / "ritten" / "sim_spoor.csv"
+
+
+def demo_starten(args):
+    """De gesimuleerde robot in dit programma starten (vrije poort) en --ip/--port daarheen zetten. Het spoor van
+    waar het robot echt reed komt in ritten/sim_spoor.csv (voor python -m jaguar.testen.terrein_rapport).
+    Geeft de naam voor het label op de pagina."""
+    import json
+    import socket
+    from jaguar.testen.sim_robot import Sim, serve
+    zones, naam = None, "vlakke grond"
+    if args.terrein != "geen":
+        zones = json.loads(Path(args.terrein).read_text(encoding="utf-8"))["zones"]
+        naam = f"{sum(z['soort'] == 'stenen' for z in zones)}× stenen, {sum(z['soort'] == 'plas' for z in zones)}× plas"
+    srv = socket.create_server(("127.0.0.1", 0))
+    sim = Sim(terrein=zones, spoor=str(DEMO_SPOOR))
+    threading.Thread(target=serve, args=(srv, sim, False), daemon=True).start()
+    args.ip, args.port = "127.0.0.1", srv.getsockname()[1]
+    args.demo_sim = sim
+    print(f"DEMO SIMULATIE: gesimuleerde robot op 127.0.0.1:{args.port} ({naam}). Geen echte robot. "
+          f"Het robot kijkt bij de start naar het noorden (boven op het raster).")
+    return naam
+
+
 def main():
     ap = argparse.ArgumentParser(description="Robot besturen vanaf de live pagina")
     ap.add_argument("--ip", default=ROBOT_IP, help="IP van de robot; 127.0.0.1 = nep_robot.py")
@@ -467,7 +554,14 @@ def main():
     ap.add_argument("--mqtt", action=argparse.BooleanOptionalAction, default=False, help="ook naar MQTT/Grafana sturen")
     ap.add_argument("--mqtt-host", default="127.0.0.1")
     ap.add_argument("--csv", action=argparse.BooleanOptionalAction, default=True, help="elke rit als CSV in ritten/ (standaard aan)")
+    ap.add_argument("--demo", action="store_true",
+                    help="zonder robot: start de gesimuleerde robot van dit project (sim_robot.py) erbij, met stenen en "
+                         "plassen uit --terrein; de pagina toont DEMO SIMULATIE")
+    ap.add_argument("--terrein", default=str(DEMO_TERREIN), help="terrein voor --demo (JSON; 'geen' = vlakke grond)")
     args = ap.parse_args()
+    args.demo_naam = None
+    if args.demo:
+        args.demo_naam = demo_starten(args)
     # Een teken dat de console niet kent (bv. → in parcours) mag nooit een rit of de server laten crashen.
     sys.stdout.reconfigure(errors="replace")
     if live_view.OPTIONS["obstakel"]:   # ook tussen de ritten: de pagina toont wat de camera ziet (kalibreren)
@@ -481,6 +575,10 @@ def main():
     hub.control = Control(hub, args)
     live_view.serve(hub, args.web_port, network=args.network)
     print(f"Robot: {args.ip}:{args.port}. Klik op Rijden op de pagina. Enter (of Ctrl+C) = afsluiten.")
+    if args.demo:
+        import webbrowser
+        print(f"Kaart van de simulatie (live): http://127.0.0.1:{args.web_port}/kaart")
+        webbrowser.open(f"http://127.0.0.1:{args.web_port}/kaart")
     try:
         input()
     except (EOFError, KeyboardInterrupt):

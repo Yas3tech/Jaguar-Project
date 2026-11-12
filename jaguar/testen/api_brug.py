@@ -60,14 +60,26 @@ class Api:
 
 
 class Brug:
-    def __init__(self, api, wereld):
+    def __init__(self, api, wereld, plaats=None, spoor=None):
         self.api = api
+        self.spoor = open(spoor, "w", encoding="utf-8") if spoor else None   # waar het robot echt reed: t,x,z,koers
+        if self.spoor:
+            print("t,x,z,koers", file=self.spoor)
         eerste = api.maak(wereld)
         self.eid, self.obs = eerste["id"], eerste["obs"]
+        if plaats:                                    # het robot ergens neerzetten (de simulator kijkt niet of daar iets staat)
+            x, z, koers = plaats
+            self.obs = api._vraag(f"envs/{self.eid}/step", {"action": {"place": {"x": x, "z": z, "yaw": math.radians(koers)}}, "dt": DT})["obs"]
         self.seq = self.n = 0
+        self.beeld_pad = None                 # na elke rit een beeld van de simulator bewaren
         self.lock = threading.Lock()
         self.wachtrij = []
         self.running = True
+
+    def beeld(self, pad, view="scene", breedte=960):
+        """Een beeld van de simulator (JPEG) bewaren."""
+        with urllib.request.urlopen(f"{self.api.url}envs/{self.eid}/frame?view={view}&width={breedte}", timeout=30) as r:
+            open(pad, "wb").write(r.read())
 
     def pose(self):
         p = self.obs["pose"]
@@ -98,7 +110,11 @@ class Brug:
         imu = ex.get("imu")
         if imu:
             raw = imu["raw"]
-            uit.append(f"#{self.seq},YAW,{imu.get('yaw', 0):.3f},GYRO,{','.join(str(int(v)) for v in raw['gyro'])},"
+            # De gyro-Y-as van de websimulator draait andersom dan die van het echte robot (daar: neus omhoog =
+            # negatieve gyro Y, zie PITCH_TEKEN in odometrie.py). Zonder omkeren telt de odometrie op een heuvel de
+            # helling dubbel in plaats van ze weg te rekenen en verwerpt ze de wielen (rit 121810: 40 cm kwijt).
+            gyro = [raw["gyro"][0], -raw["gyro"][1], raw["gyro"][2]]
+            uit.append(f"#{self.seq},YAW,{imu.get('yaw', 0):.3f},GYRO,{','.join(str(int(v)) for v in gyro)},"
                        f"ACC,{','.join(str(int(v)) for v in raw['acc'])},COMP,{','.join(str(int(v)) for v in raw['mag'])},ADC,0")
             self.seq = (self.seq + 1) % 256
         self.n += 1
@@ -131,6 +147,9 @@ class Brug:
                     regels, self.wachtrij = self.wachtrij, []
                 r = self.api.stap(self.eid, regels)
                 self.obs = r["obs"]
+                if self.spoor and self.n % 10 == 0:
+                    x, z, h = self.pose()
+                    print(f"{self.obs['t']:.2f},{x:.4f},{z:.4f},{h:.2f}", file=self.spoor, flush=True)
                 uit = self.regels_uit(r)
                 if uit:
                     conn.sendall(("\r\n".join(uit) + "\r\n").encode("ascii"))
@@ -142,6 +161,11 @@ class Brug:
         for _ in range(100):                           # zonder script: de watchdog stopt de motoren, het robot rolt uit
             self.obs = self.api.stap(self.eid, [])["obs"]
         x, z, h = self.pose()
+        if self.beeld_pad:
+            try:
+                self.beeld(self.beeld_pad)
+            except OSError as e:
+                print(f"beeld niet bewaard: {e}")
         gps = self.obs["extra"].get("gps") or {}
         print(f"{time.strftime('%H:%M:%S')}  verbinding dicht. ECHT in de simulatie: {math.hypot(x - x0, z - z0):.3f} m van waar deze rit begon "
               f"(dx {x - x0:+.3f}, dz {z - z0:+.3f} m), koers {(h - h0 + 180) % 360 - 180:+.1f}° gedraaid; "
@@ -154,9 +178,17 @@ def main():
     ap.add_argument("--api", default="http://localhost:8780", help="adres van node server.mjs")
     ap.add_argument("--port", type=int, default=10001)
     ap.add_argument("--wereld", default="park", help="omgeving in de simulator (park, course, …)")
+    ap.add_argument("--plaats", help="x,z,koers: het robot daar neerzetten (m en graden; koers 0 = oost, 90 = noord). "
+                                     "In het park is x 8..20, z -6..6 een vlak grasveld zonder obstakels: bv. --plaats 9,4,0")
+    ap.add_argument("--spoor", help="CSV waarin komt waar het robot in de simulatie echt reed (t,x,z,koers; 5 keer per seconde)")
+    ap.add_argument("--beeld", help="JPEG van de simulator, bewaard na elke rit")
     args = ap.parse_args()
     try:
-        brug = Brug(Api(args.api), args.wereld)
+        plaats = tuple(float(v) for v in args.plaats.split(",")) if args.plaats else None
+        if plaats and len(plaats) != 3:
+            ap.error("--plaats: x,z,koers")
+        brug = Brug(Api(args.api), args.wereld, plaats, args.spoor)
+        brug.beeld_pad = args.beeld
     except OSError as e:
         raise SystemExit(f"De Training API antwoordt niet op {args.api} ({e}). Start eerst  node server.mjs  in robotSimulatorAPI.")
     srv = socket.create_server(("127.0.0.1", args.port))

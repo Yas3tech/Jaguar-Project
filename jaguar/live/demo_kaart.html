@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo simulatie · kaart</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f172a; color: #e2e8f0; font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; gap: 12px; align-items: center; padding: 8px 14px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; }
+  .badge { background: #b45309; color: #fff; font-weight: 700; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
+  #stand { color: #cbd5e1; }
+  .leg { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 14px 6px; font-size: 13px; color: #cbd5e1; }
+  .leg i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 5px; }
+  .leg b { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-right: 5px; }
+  canvas { flex: 1; width: 100%; min-height: 0; background: #14532d; cursor: grab; }
+  button { background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kaart van de simulatie</h1><span class="badge">DEMO SIMULATIE</span>
+  <span id="stand">verbinden…</span>
+  <button id="volg" aria-pressed="true">Robot volgen: aan</button>
+  <button id="beeld">Beeld bewaren (PNG)</button>
+</header>
+<div class="leg">
+  <span><i style="border-color:#fbbf24;border-top-style:dashed"></i>gevraagde route</span>
+  <span><i style="border-color:#ef4444"></i>waar het robot echt rijdt</span>
+  <span><i style="border-color:#38bdf8"></i>waar het robot denkt te rijden (wielen + gyro)</span>
+  <span><b style="background:#9ca3af"></b>stenen</span>
+  <span><b style="background:#3b82f6"></b>plas</span>
+  <span>slepen = verschuiven · wiel = zoomen</span>
+</div>
+<canvas id="c"></canvas>
+<script>
+// Alles in meters vanaf de start: x = oost, y = noord. De gegevens komen van /sim.json (bediening.py --demo).
+const c = document.getElementById("c"), g = c.getContext("2d");
+let D = null, schaal = 45, cx = 5, cy = 3, volgen = true, sleep = null;
+const X = (e) => c.width / 2 + (e - cx) * schaal, Y = (n) => c.height / 2 - (n - cy) * schaal;
+function maat() { const r = c.getBoundingClientRect(); c.width = r.width * devicePixelRatio; c.height = r.height * devicePixelRatio; }
+function lijn(pts, kleur, dik, streep) {
+  if (!pts || pts.length < 2) return;
+  g.beginPath(); g.setLineDash(streep || []); g.lineWidth = dik * devicePixelRatio; g.strokeStyle = kleur; g.lineJoin = "round";
+  pts.forEach((p, i) => (i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])))); g.stroke(); g.setLineDash([]);
+}
+function teken() {
+  maat(); g.fillStyle = "#14532d"; g.fillRect(0, 0, c.width, c.height);
+  // raster van 1 m
+  g.lineWidth = 1; g.strokeStyle = "rgba(255,255,255,.08)";
+  for (let m = Math.floor(cx - c.width / 2 / schaal); m <= cx + c.width / 2 / schaal; m++) { g.beginPath(); g.moveTo(X(m), 0); g.lineTo(X(m), c.height); g.stroke(); }
+  for (let m = Math.floor(cy - c.height / 2 / schaal); m <= cy + c.height / 2 / schaal; m++) { g.beginPath(); g.moveTo(0, Y(m)); g.lineTo(c.width, Y(m)); g.stroke(); }
+  if (!D) return;
+  for (const z of D.zones) {
+    g.beginPath(); g.arc(X(z.x), Y(z.y), z.r * schaal, 0, 7);
+    g.fillStyle = z.soort === "plas" ? "rgba(59,130,246,.55)" : "rgba(156,163,175,.6)"; g.fill();
+    g.fillStyle = "#fff"; g.font = `${12 * devicePixelRatio}px system-ui`; g.textAlign = "center"; g.fillText(z.soort, X(z.x), Y(z.y) + 4);
+  }
+  lijn(D.plan, "#fbbf24", 2, [8 * devicePixelRatio, 6 * devicePixelRatio]);
+  lijn(D.odo, "#38bdf8", 2);
+  lijn(D.echt, "#ef4444", 2.5);
+  g.beginPath(); g.arc(X(0), Y(0), 6 * devicePixelRatio, 0, 7); g.fillStyle = "#22c55e"; g.fill();
+  // het robot: 62 × 57 cm, neus als driehoek. koers = kompaskoers (0 = noord, met de klok mee)
+  const [e, n, k] = D.robot, a = (90 - k) * Math.PI / 180;
+  g.save(); g.translate(X(e), Y(n)); g.rotate(-a);
+  g.fillStyle = "#111827"; g.strokeStyle = "#f8fafc"; g.lineWidth = 2 * devicePixelRatio;
+  g.fillRect(-0.31 * schaal, -0.285 * schaal, 0.62 * schaal, 0.57 * schaal); g.strokeRect(-0.31 * schaal, -0.285 * schaal, 0.62 * schaal, 0.57 * schaal);
+  g.beginPath(); g.moveTo(0.31 * schaal, -0.15 * schaal); g.lineTo(0.5 * schaal, 0); g.lineTo(0.31 * schaal, 0.15 * schaal); g.closePath(); g.fillStyle = "#f8fafc"; g.fill();
+  g.restore();
+}
+async function haal() {
+  try {
+    const r = await fetch("/sim.json", { cache: "no-store" });
+    if (!r.ok) throw new Error((await r.json()).fout || r.status);
+    D = await r.json();
+    if (volgen) { cx = D.robot[0]; cy = D.robot[1]; }
+    const naast = D.odo.length ? Math.hypot(D.robot[0] - D.odo[D.odo.length - 1][0], D.robot[1] - D.odo[D.odo.length - 1][1]) : 0;
+    document.getElementById("stand").textContent =
+      `${D.bezig ? "rit loopt" : "geen rit"} · grond: ${D.grond || "gewoon"} · echt gereden ${D.gereden.toFixed(1)} m` +
+      (D.odo.length ? ` · het robot staat ${(naast * 100).toFixed(0)} cm van waar het denkt te staan` : "");
+  } catch (e) { document.getElementById("stand").textContent = "geen gegevens: " + e.message; }
+  teken();
+}
+c.onmousedown = (e) => { sleep = [e.clientX, e.clientY, cx, cy]; volgen = false; knop(); };
+onmousemove = (e) => { if (sleep) { cx = sleep[2] - (e.clientX - sleep[0]) * devicePixelRatio / schaal; cy = sleep[3] + (e.clientY - sleep[1]) * devicePixelRatio / schaal; teken(); } };
+onmouseup = () => (sleep = null);
+c.onwheel = (e) => { e.preventDefault(); schaal = Math.max(8, Math.min(300, schaal * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); teken(); };
+function knop() { const b = document.getElementById("volg"); b.textContent = "Robot volgen: " + (volgen ? "aan" : "uit"); b.setAttribute("aria-pressed", volgen); }
+document.getElementById("volg").onclick = () => { volgen = !volgen; knop(); };
+document.getElementById("beeld").onclick = () => { const a = document.createElement("a"); a.download = "demo_kaart.png"; a.href = c.toDataURL("image/png"); a.click(); };
+onresize = teken; setInterval(haal, 200); haal();
+</script>
+</body>
+</html>

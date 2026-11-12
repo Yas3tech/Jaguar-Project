@@ -25,6 +25,7 @@ Het is een oefenrobot, geen bewijs dat de echte hetzelfde doet. De simulator van
 die bereik je met zijn eigen brug (jaguar_bridge.py) ook op 127.0.0.1:10001.
 """
 import argparse
+import json
 import math
 import random
 import socket
@@ -34,7 +35,7 @@ from collections import deque
 
 from jaguar.analyse.rit import ACC_LSB_G, GYRO_LSB_DPS, M_PER_CNT
 from jaguar.kern.robot import K_V
-from jaguar.navigatie.gps import KT, Lokaal, robot_naar_enu
+from jaguar.navigatie.gps import KT, Lokaal, enu_naar_robot, robot_naar_enu
 
 SPOOR_ECHT = 1.2         # m: effectieve spoorbreedte bij draaien (de wielen zelf staan 0,52 m uit elkaar)
 VERTRAGING = 0.25        # s
@@ -43,6 +44,12 @@ STIL_V = 0.05            # m/s: zonder vermogen en trager dan dit staat een kant
 WATCHDOG_S = 0.3         # s zonder PING = motoren 0 (de robot vraagt een PING om de 0,2 s; de websimulator stopt na 0,3 s)
 GYRO_BIAS = (600, 0, -580)   # counts, ongeveer zoals op de robot
 START_LAT, START_LON = 50.8419000, 4.3229000
+# Terrein (--terrein bestand.json): cirkels op de grond, in meters vanaf de start (x = oost, y = noord), zoals de
+# ontwerper tekent. Wat ze met het robot doen:
+#   stenen  het robot schudt (trilling en schokken in de IMU), rijdt 15 % trager en wordt telkens wat uit koers geduwd
+#   plas    de wielen slippen: het robot komt PLAS_SLIP minder ver dan de wielen tellen en schudt niet
+STENEN_TRIL, STENEN_SNELHEID, STENEN_DRAAI = 0.30, 0.85, 8.0      # g, deel van de snelheid, graden/s (ruis op de koers)
+PLAS_SLIP = 0.35
 
 
 def rmc(lat, lon, v, cog, fix=True, t=None):
@@ -69,7 +76,7 @@ class Sim:
 
     def __init__(self, batterij=24.0, verbruik=0.0, lat=START_LAT, lon=START_LON, richting=0.0, gps=True,
                  gps_ruis=0.02, gps_dwaal=0.0, slip=0.0, snelheid=0.9, vertraging=VERTRAGING, watchdog=WATCHDOG_S,
-                 achterdriver=True, gps_vertraging=0.0):
+                 achterdriver=True, gps_vertraging=0.0, terrein=None, spoor=None):
         self.conn = None
         self.lock = threading.Lock()
         self.pl = self.pr = 0             # gevraagd vermogen links / rechts
@@ -91,6 +98,14 @@ class Sim:
         self.vertraging = vertraging
         self.watchdog = watchdog
         self.achterdriver = achterdriver  # False: alleen MM0 meldt encoders
+        # terrein: [(soort, x, y, r)] in het stelsel van het robot bij de start (x vooruit, y links)
+        self.terrein = [(z["soort"], *enu_naar_robot(z["x"], z["y"], richting), z["r"]) for z in (terrein or [])]
+        self.grond = ""                   # waar het robot nu op rijdt: "", "stenen" of "plas"
+        self.spoor = open(spoor, "w", encoding="utf-8") if spoor else None   # waar het robot echt reed
+        if self.spoor:
+            print("t,oost,noord,koers,grond", file=self.spoor)
+        self.t = 0.0
+        self.gereden = [(0.0, 0.0)]       # waar het robot echt reed (oost, noord), om de 0,2 s, voor de kaart
         self.tellers_nul()
 
     def tellers_nul(self):
@@ -172,8 +187,15 @@ class Sim:
                 if tr == 0 and abs(self.vr) < STIL_V:
                     self.vr = 0.0
                 v_wiel = (self.vl + self.vr) / 2
+                self.grond = next((soort for soort, zx, zy, zr in self.terrein if math.hypot(self.x - zx, self.y - zy) <= zr), "")
                 v = v_wiel * (1 - self.slip)                  # wat de grond ervan overlaat
                 rate = math.degrees((self.vr - self.vl) / SPOOR_ECHT)
+                if self.grond == "plas":
+                    v *= 1 - PLAS_SLIP
+                elif self.grond == "stenen" and abs(v_wiel) > 0.02:
+                    v *= STENEN_SNELHEID
+                    rate += random.gauss(0, STENEN_DRAAI)
+                self.t += dt
                 self.h += rate * dt
                 self.x += v * math.cos(math.radians(self.h)) * dt
                 self.y += v * math.sin(math.radians(self.h)) * dt
@@ -192,7 +214,12 @@ class Sim:
                 v_oud = v
                 bewegen = abs(self.vl) + abs(self.vr) > 0.02
                 tril = 0.08 if bewegen else 0.004
-                g = [GYRO_BIAS[0] + random.gauss(0, 1), GYRO_BIAS[1] + random.gauss(0, 1),
+                schok = 0.0
+                if bewegen and self.grond == "stenen":
+                    tril, schok = STENEN_TRIL, 25.0           # schokken in de gyro (counts) om de x- en y-as
+                elif bewegen and self.grond == "plas":
+                    tril = 0.03
+                g = [GYRO_BIAS[0] + random.gauss(0, 1 + schok), GYRO_BIAS[1] + random.gauss(0, 1 + schok),
                      GYRO_BIAS[2] + rate * GYRO_LSB_DPS + random.gauss(0, 1)]
                 a = [acc / 9.81 * ACC_LSB_G + random.gauss(0, 1), random.gauss(0, 1),
                      ACC_LSB_G * (1 + random.gauss(0, tril))]
@@ -200,6 +227,12 @@ class Sim:
                           f"ACC,{','.join(str(round(x)) for x in a)},ADC,0,0,0,0,")
                 seq = (seq + 1) % 256
                 n += 1
+                if n % 10 == 0 and bewegen:
+                    self.gereden.append(tuple(round(w, 3) for w in robot_naar_enu(self.x, self.y, self.richting)))
+                    del self.gereden[:-6000]          # 20 minuten rijden
+                if n % 10 == 0 and self.spoor:
+                    oost, noord = robot_naar_enu(self.x, self.y, self.richting)
+                    print(f"{self.t:.2f},{oost:.4f},{noord:.4f},{self.richting - self.h:.2f},{self.grond}", file=self.spoor, flush=True)
                 if n % 10 == 0:                   # 5 Hz: encoders van beide drivers, spanning, GPS
                     cl, cr = round(self.wl / M_PER_CNT), round(self.wr / M_PER_CNT)
                     self.send(f"MM0 C={cl}:{-cr}")
@@ -237,14 +270,18 @@ def main():
     ap.add_argument("--gps-ruis", type=float, default=0.02, help="ruis van de GPS-positie in m (standaard 0,02; echte GPS: 1 tot 3)")
     ap.add_argument("--gps-dwaal", type=float, default=0.0, help="langzaam dwalen van de GPS in m per wortel-seconde (echte GPS buiten: ca. 0,2)")
     ap.add_argument("--gps-vertraging", type=float, default=0.0, help="s: de GPS meldt waar het robot zoveel seconden geleden was (echte GPS: tot 1 s)")
+    ap.add_argument("--terrein", help="JSON met stenen en plassen op de grond (zie testdata/terrein_demo.json)")
+    ap.add_argument("--spoor", help="CSV waarin komt waar het robot echt reed (t,oost,noord,koers,grond; 5 keer per seconde)")
     ap.add_argument("--slip", type=float, default=0.0, help="deel van de wielweg dat de grond niet volgt (0,05 = 5 %% minder ver dan de wielen tellen)")
     ap.add_argument("--snelheid", type=float, default=0.9, help="echte snelheid t.o.v. wat het vermogen voorspelt (standaard 0,9)")
     ap.add_argument("--vertraging", type=float, default=VERTRAGING, help="s: hoe traag de motoren het vermogen volgen")
     ap.add_argument("--watchdog", type=float, default=WATCHDOG_S, help="s zonder PING voor de motoren stoppen")
     args = ap.parse_args()
+    terrein = json.loads(open(args.terrein, encoding="utf-8").read())["zones"] if args.terrein else None
     srv = socket.create_server(("127.0.0.1", args.port))
     sim = Sim(args.batterij, args.verbruik, args.lat, args.lon, args.richting, not args.geen_gps, args.gps_ruis,
-              args.gps_dwaal, args.slip, args.snelheid, args.vertraging, args.watchdog, gps_vertraging=args.gps_vertraging)
+              args.gps_dwaal, args.slip, args.snelheid, args.vertraging, args.watchdog, gps_vertraging=args.gps_vertraging,
+              terrein=terrein, spoor=args.spoor)
     print(f"Gesimuleerde robot klaar op 127.0.0.1:{args.port} (start {args.lat:.7f}, {args.lon:.7f}, kijkt naar "
           f"{args.richting:.0f}°, GPS {'uit' if args.geen_gps else f'ruis {args.gps_ruis:g} m'}). Ctrl+C = stoppen.")
     serve(srv, sim)

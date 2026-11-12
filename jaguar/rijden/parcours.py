@@ -86,11 +86,39 @@ def rijd(robot, stappen, power=250, turn_power=380, pause=1.0, ramp=1.5, creep=6
     def vanaf_hier():                                 # na een pauze midden in een draai of boog: de rest vanaf de koers nu
         robot.target_heading = robot.heading
 
+    overslaan = 0
     for i, stap_ in enumerate(stappen, 1):
         soort, value = stap_[0], stap_[1]
+        if overslaan:                                     # al gereden als deel van een pad
+            overslaan -= 1
+            continue
         if i > 1:
             robot.phase = "pauze"
             robot.hold(pause)
+        # Vloeiend (er zitten bogen in): rechte stukken en bogen die op elkaar volgen rijdt het robot als één pad,
+        # zonder te stoppen. Alleen voor een draai ter plaatse (een scherpe hoek) staat het stil.
+        groep = []
+        for volgende in stappen[i - 1:]:
+            if volgende[0] not in ("vooruit", "boog"):
+                break
+            groep.append(volgende)
+        if len(groep) >= 2 and any(g[0] == "boog" for g in groep):
+            robot.phase = f"{prefix}{i}-pad"
+            pad, eind = pad_punten((px, py), robot.target_heading, groep)
+            lengte = sum(float(g[1]) if g[0] == "vooruit" else float(g[1]) * math.radians(abs(float(g[2]))) for g in groep)
+            robot.note(f"PLAN {robot.phase} {lengte:.4f}")
+
+            def rijd_pad(pad=pad, eind=eind):
+                if math.hypot(pad[-1][0] - robot.odo.x, pad[-1][1] - robot.odo.y) > 0.05:   # pauze in de eindkoers: niet opnieuw
+                    robot.volg(pad, power, ramp)
+                    if robot.vast:
+                        raise Vastgelopen(f"vastgelopen op het pad ({robot.vast}): het parcours stopt hier")
+                robot.target_heading = eind
+                robot.eindkoers(turn_power)
+            robot.met_pauze(rijd_pad)
+            px, py = pad[-1]
+            overslaan = len(groep) - 1
+            continue
         if soort == "boog":                               # ("boog", radius m, hoek graden, + = links)
             robot.phase = f"{prefix}{i}-boog"
             h = math.radians(robot.target_heading)
@@ -162,6 +190,31 @@ def rijd_punten(robot, n, doel, power=250, turn_power=380, pause=1.0, ramp=1.5, 
             rechtdoor(robot, (robot.odo.x, robot.odo.y), afstand, power, turn_power, ramp, creep, tolerance)
     robot.phase = "uitbollen"
     robot.hold(2.0)
+
+
+def pad_punten(start, koers, groep, stap_m=0.02):
+    """Rechte stukken en bogen die op elkaar volgen als één pad: (punten (x, y) om de `stap_m`, eindkoers in graden).
+    start: het geplande hoekpunt; koers: de geplande richting daar (graden, + = links)."""
+    x, y = start
+    h = math.radians(koers)
+    pad = [(x, y)]
+    for g in groep:
+        if g[0] == "vooruit":
+            d = float(g[1])
+            n = max(1, round(d / stap_m))
+            for k in range(1, n + 1):
+                pad.append((x + d * k / n * math.cos(h), y + d * k / n * math.sin(h)))
+        else:                                             # ("boog", radius, hoek): + = naar links
+            r, a = float(g[1]), math.radians(float(g[2]))
+            kant = 1 if a > 0 else -1
+            cx, cy = x - kant * r * math.sin(h), y + kant * r * math.cos(h)
+            n = max(1, round(r * abs(a) / stap_m))
+            for k in range(1, n + 1):
+                b = h + a * k / n
+                pad.append((cx + kant * r * math.sin(b), cy - kant * r * math.cos(b)))
+            h += a
+        x, y = pad[-1]
+    return pad, koers + math.degrees(h - math.radians(koers))
 
 
 def naar_start(x, y, koers):

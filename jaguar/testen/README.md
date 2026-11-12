@@ -76,4 +76,8 @@ De websimulator rekent met een wielstraal van 0,135 m; dit project met de straal
 
 Wat de websimulator stuurt, is vergeleken met wat de code leest (documentatie en broncode van de pagina): dezelfde IMU-regel (17 velden, met COMP), encoders van beide drivers met 5 Hz, `V=` en `FF=`, `$GPRMC` (en `$GPGGA`, die wordt overgeslagen), watchdog 0,3 s. De GPS heeft daar standaard een fout van ongeveer 1 m die langzaam dwaalt (vakje "GPS error") en een resolutie van 18 cm: `gps_route` behandelt hem als een gewone GPS.
 
-**Eerlijk over de status:** er is **nog geen rit gereden tegen de websimulator zelf** (de testbrowser mocht van Chrome niet met de brug verbinden) en **niet op de echte robot**. Alles is alleen gecontroleerd tegen `sim_robot.py`, en dat is een model.
+### Zonder browser: `api_brug.py`
+
+De websimulator draait ook zonder venster op je eigen pc (de "Training API": `node server.mjs` in robotSimulatorAPI, met de sleutel van je account in `ROBOTSIM_KEY`; zet die sleutel nooit in een bestand van dit project). `python -m jaguar.testen.api_brug` maakt daar een Jaguar van op 127.0.0.1:10001, en bij het sluiten van elke verbinding toont de brug waar het robot in de simulatie echt staat. Zie de uitleg bovenaan `api_brug.py`. Blijf in het park dicht bij de start (ongeveer 5 m vlak rechtdoor): verderop staan obstakels, en de omgeving `course` is de hindernisbaan.
+
+**Eerlijk over de status.** Tegen de websimulator (via `api_brug.py`) is gereden: 4 m gevraagd gaf 4,011 tot 4,019 m echt (9 ritten, één beweging); 3,5 m heen, keren, terug, keren eindigde op 7 cm van de start; tegen een obstakel stopt de stap met VASTGELOPEN en stopt het parcours. De GPS dwaalde daar meer dan 4 m en werd niet gebruikt. Nog niet gereden tegen de websimulator: een route vanaf de kaart (ontwerper) en een hele GPS-route zonder obstakel. **Niets is getest op de echte robot.** De tests in deze map draaien tegen `sim_robot.py`, en dat is een model.

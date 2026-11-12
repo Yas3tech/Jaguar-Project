@@ -65,7 +65,7 @@ def is_drive(fase):
     """Rechtdoor rijden: heen/terug/rijden, handmatig (bediening.py), of een parcoursstap zoals '1-vooruit',
     '2-achteruit' of 'terug-2-vooruit' (de terugweg naar de start)."""
     return (fase in ("rijden", "heen", "terug", "handmatig")
-            or re.fullmatch(r"(terug-)?\d+-(vooruit|achteruit|boog)", fase) is not None)
+            or re.fullmatch(r"(terug-)?\d+-(vooruit|achteruit|boog|pad)", fase) is not None)
 
 
 def is_turn(fase):
@@ -79,7 +79,7 @@ def load(path):
         for r in csv.DictReader(f):
             t, fase, line = float(r["t"]), r["fase"], r["regel"]
             p = line.split(",")
-            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID", "PLAN", "KOERS", "OMWEG", "OBSTAKEL", "MELDING"):   # eigen regels van het rijscript
+            if line.split(" ", 1)[0] in ("DOEL", "STOP", "VAST", "DRAAI", "GEDRAAID", "PLAN", "PADPUNTEN", "KOERS", "OMWEG", "OBSTAKEL", "MELDING"):   # eigen regels van het rijscript
                 notes.append((t, line.split()))
             elif p[0].startswith("#"):
                 velden = odometrie.imu_velden(p)   # None = beschadigd wifipakket (bv. "ACC,-6,,256"): sample overslaan
@@ -441,11 +441,21 @@ def analyse(path):
     # Een omweg rond een obstakel (fase "3-vooruit-omweg") hoort niet bij het plan; de stap zelf kan
     # dan in delen gereden zijn (DOEL … STOP voor en na de omweg): die tellen samen als één stap.
     plan, open_steps, planned, done = [], {}, {}, {}
+    pad_punten = []                       # de geplande vorm van paden die in één beweging zijn gereden (PADPUNTEN)
     for t, words in notes:
         if len(words) > 1 and "omweg" in words[1]:
             continue
+        if words[0] == "PADPUNTEN":
+            try:
+                pad_punten += [tuple(float(v) for v in w.split(";")) for w in words[2:]]
+            except ValueError:
+                pass
+            continue
         if words[0] == "PLAN" and len(words) > 2:
-            planned[words[1]] = float(words[2])
+            try:
+                planned[words[1]] = float(words[2])
+            except ValueError:
+                pass                        # een plan zonder getal (oudere rit met een pad): overslaan
         elif words[0] in ("DOEL", "DRAAI") and len(words) > 2:
             goal = float(words[2])
             kind = "draai" if words[0] == "DRAAI" else ("vooruit" if goal >= 0 else "achteruit")
@@ -523,6 +533,9 @@ def analyse(path):
         "doelen": list(doelen.values()),
         "plan": plan,
     }
+    if len(pad_punten) > 1:
+        summary["pad"] = {"punten": [[round(a, 3), round(b, 3)] for a, b in pad_punten]}
+        summary["pad_beeld"] = pad_beeld(pad_punten, x, y, summary)
     series = {
         "t": [rnd(t, 3) for t in ts],
         "s": [rnd(v, 3) for v in s_at],
@@ -544,6 +557,46 @@ def analyse(path):
         "vib": [[rnd(t, 2), rnd(s, 3), rnd(r, 4)] for t, s, r in vib],
     }
     return {"summary": summary, "series": series}
+
+
+def pad_beeld(pad, x, y, summary):
+    """Plaatje van de gevraagde route (stippellijn) en de route die het robot volgens zijn eigen metingen reed (rood),
+    als data-URI voor in het dashboard; None zonder matplotlib. x, y in meters (x vooruit, y links, vanaf de start)."""
+    try:
+        import base64
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    gereden = [(a, b) for a, b in zip(x, y)]
+    gereden = gereden[next((k for k, (a, b) in enumerate(gereden) if abs(a) + abs(b) > 0.02), 0):]
+
+    def afstand(px, py):                           # kortste afstand tot de gevraagde lijn
+        best = 9e9
+        for (ax, ay), (cx, cy) in zip(pad, pad[1:]):
+            dx, dy = cx - ax, cy - ay
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy or 1.0)))
+            best = min(best, ((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2) ** 0.5)
+        return best
+    afw = [afstand(a, b) for a, b in gereden[::3]] or [0.0]
+    eind = ((gereden[-1][0] - pad[-1][0]) ** 2 + (gereden[-1][1] - pad[-1][1]) ** 2) ** 0.5 if gereden else 0.0
+    fig, ax = plt.subplots(figsize=(7, 6.4))
+    ax.plot([p[1] for p in pad], [p[0] for p in pad], "--", color="#555", lw=1.6, label="gevraagde route")
+    ax.plot([p[1] for p in gereden], [p[0] for p in gereden], color="#d33", lw=1.8, label="gereden route (volgens het robot)")
+    ax.plot(pad[0][1], pad[0][0], "o", color="green", ms=10, label="start")
+    ax.plot(pad[-1][1], pad[-1][0], "s", color="#0a7", ms=8, mfc="none", mew=2, label="einde van de route")
+    if gereden:
+        ax.plot(gereden[-1][1], gereden[-1][0], "x", color="black", ms=11, mew=3, label=f"gestopt op {eind * 100:.0f} cm van het einde")
+    ax.invert_xaxis()                              # links van het robot ook links op de tekening
+    ax.set_aspect("equal"); ax.grid(alpha=.3); ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, frameon=False)
+    ax.set_xlabel("links van de startrichting (m)"); ax.set_ylabel("vooruit (m)")
+    ax.set_title(f"Route in één beweging: gemiddeld {sum(afw) / len(afw) * 100:.0f} cm, hoogstens {max(afw) * 100:.0f} cm naast de lijn")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=90, bbox_inches="tight")
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def write_dashboard(analysis_dir, selected_rit):

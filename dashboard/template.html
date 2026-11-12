@@ -190,6 +190,11 @@ tr:last-child td { border-bottom: 0; }
     <div class="answers" id="answers"></div>
   </section>
 
+  <section id="route-sec" hidden aria-labelledby="h-route">
+    <div class="sec-head"><h2 id="h-route">De route</h2><p>Gevraagd (stippellijn) tegenover wat het robot zelf reed, in één beweging zonder te stoppen.</p></div>
+    <div class="panel" style="text-align:center"><img id="route-img" alt="Gevraagde en gereden route" style="display:block;margin:0 auto;max-width:100%;height:auto"></div>
+  </section>
+
   <section aria-labelledby="h-rit">
     <div class="sec-head"><h2 id="h-rit">Bekijk de rit</h2><p>Druk op afspelen of sleep de tijdlijn. De robot rijdt op beide beelden tegelijk.</p></div>
     <div class="panel player">
@@ -524,7 +529,7 @@ const terrain3d = (() => {
       seg.position.set((a.x + b.x) / 2, base + 0.003, -(a.y + b.y) / 2); seg.rotation.y = Math.atan2(b.y - a.y, b.x - a.x); world.add(seg);
     }
     const marks = [[way[0], home ? "START = EINDE" : "START", css("--ink-2")]];
-    way.slice(1).forEach((w, i) => { const end = i === way.length - 2; if (!(end && home)) marks.push([w, end ? "EINDE" : `na stap ${w.step}`, end ? css("--good") : css("--ink-2")]); });
+    way.slice(1).forEach((w, i) => { const end = i === way.length - 2; if (way.isPad && !end) return; if (!(end && home)) marks.push([w, end ? "EINDE" : `na stap ${w.step}`, end ? css("--good") : css("--ink-2")]); });
     marks.forEach(([w, text, color]) => {
       const disc = new T.Mesh(new T.CylinderGeometry(0.12, 0.12, 0.006, 32), new T.MeshBasicMaterial({ color: new T.Color(color) }));
       disc.position.set(w.x, base + 0.004, -w.y); world.add(disc);
@@ -689,8 +694,21 @@ plan.forEach((p, i) => {
   const w = way.at(-1);
   way.push({ x: w.x + p.doel * Math.cos(ph * RAD), y: w.y + p.doel * Math.sin(ph * RAD), h: ph, step: i + 1 });
 });
+// Een pad dat in één beweging is gereden (bogen, hele route): het robot heeft de vorm in het logboek gezet. Die vorm is
+// dan de geplande route, en alleen het begin en het einde krijgen een label.
+const padVorm = S.pad && S.pad.punten && S.pad.punten.length > 1 && !plan.some((p) => p.soort !== "draai") ? S.pad.punten : null;
+if (padVorm) {
+  way.length = 0;
+  padVorm.forEach(([x, y], i, a) => {
+    const b = a[Math.min(i + 1, a.length - 1)], c = a[Math.max(i - 1, 0)];
+    way.push({ x, y, h: Math.atan2(b[1] - c[1], b[0] - c[0]) / RAD, step: 1 });
+  });
+  ph = way.at(-1).h; way.isPad = true;
+}
+const routeImg = document.getElementById("route-img"), routeSec = document.getElementById("route-sec");
+if (routeSec) { routeSec.hidden = !S.pad_beeld; if (S.pad_beeld) routeImg.src = S.pad_beeld; }
 const goal = { ...way.at(-1), h: ph };
-const flat = way.every((w) => Math.abs(w.y) < 0.01) && turns.length === 0;   // alles op één lijn: zijwaarts vergroten mag
+const flat = !padVorm && way.every((w) => Math.abs(w.y) < 0.01) && turns.length === 0;   // alles op één lijn: zijwaarts vergroten mag
 const backHome = way.length > 1 && Math.hypot(goal.x, goal.y) < 0.05;
 const segPts = way.slice(1).map((w, i) => [way[i], w]).filter(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y) > 1e-6);
 // Afstand tot de geplande route (m); + = links, gezien in de richting waarin de robot kijkt.
@@ -737,7 +755,7 @@ if (turns.length) {
   answers.push([terr < 2 ? "good" : terr < 5 ? "warn" : "bad", "Draaide hij juist?", turns.map((p) => `${nl(Math.abs(p.gemeten), 1)}°`).join(" · "),
     `Doel: ${turns.map((p) => turnTxt(p.doel)).join(", ")}. Gemeten met de gyro; zo juist als de gyro gekalibreerd is.`]);
 }
-if (plan.length) {
+if (plan.length || padVorm) {
   answers.push([endDist < 0.03 ? "good" : endDist < 0.1 ? "warn" : "bad", backHome ? "Terug op zijn startpunt?" : "Aangekomen op het eindpunt?",
     endDist < 0.005 ? "Ja, precies" : `${cm(endDist)} ernaast`,
     endDist < 0.005 ? "Op minder dan een halve centimeter." : `${cm(endAlong)} ${endAlong > 0 ? "te ver naar voren" : "te ver naar achteren"}, ${cm(endSide)} ${endSide > 0 ? "naar links" : "naar rechts"} (gezien vanuit de robot).`]);
@@ -849,6 +867,7 @@ function buildMap() {
   way.slice(1).forEach((w, i) => {
     const isEnd = i === way.length - 2;
     if (isEnd && backHome) return;
+    if (way.isPad && !isEnd) return;
     const col = isEnd ? "var(--good)" : "var(--ink-2)";
     g += `<circle cx="${X(w.x)}" cy="${Y(w.y)}" r="7" fill="none" stroke="${col}" stroke-width="3"/>`;
     g += `<text x="${X(w.x)}" y="${Y(w.y) - 14}" text-anchor="middle" class="lab" style="fill:${col}">${isEnd ? "EINDE" : `na stap ${w.step}`}</text>`;

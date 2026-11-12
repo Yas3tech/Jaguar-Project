@@ -152,6 +152,7 @@ dialog iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 <div class="wrap">
   <header>
     <h1>Jaguar live</h1>
+    <a id="demo" href="/kaart" target="_blank" hidden style="text-decoration:none;background:#b45309;color:#fff;font-weight:700;padding:3px 10px;border-radius:999px;font-size:13px" title="Geen echte robot: de gesimuleerde robot van dit project (sim_robot.py). Klik voor de kaart">DEMO SIMULATIE · kaart ↗</a>
     <span id="conn" class="chip wait"><i></i>wachten op script</span>
     <span id="name" class="sub"></span>
     <div class="actions">
@@ -438,6 +439,7 @@ try {   // laatste parcours van deze browser
 let ctl = null;   // laatste stand van bediening.py
 function controlState(b) {
   ctl = b || null;
+  $("demo").hidden = !b?.demo; if (b?.demo) $("demo").textContent = "DEMO SIMULATIE · " + (b.demo === true ? "" : b.demo + " · ") + "kaart ↗";
   const bezig = !!b?.bezig, lokaal = !!b?.mag_starten, hand = bezig && b.soort === "handmatig";
   $("b-rit").hidden = !b || !lokaal || bezig;
   $("b-hand").hidden = !b || !lokaal || bezig || !$("hand").hidden;

@@ -39,7 +39,7 @@ import argparse
 import math
 from collections import deque
 
-from jaguar.kern.robot import add_drive_args, positive_seconds, prepare, robot_session
+from jaguar.kern.robot import Vastgelopen, add_drive_args, positive_seconds, prepare, robot_session
 from jaguar.navigatie.gps import Lokaal, NoordPeiling, Uitlijning, enu_naar_robot, hoek180, robot_naar_enu
 from jaguar.navigatie.route import beschrijf, route_naar_stappen
 from jaguar.rijden.parcours import rijd_punten
@@ -152,9 +152,27 @@ def noord_zoeken(robot, volger, meter, power, ramp, creep, tolerance):
                      "Rijd verder (--kalibreer-noord groter) of sneller (--noord-power), buiten onder open hemel, of geef --richting op.")
 
 
+def vloeiend_pad(punten, stap_m=0.02):
+    """Een lijn door de punten (x, y) als pad voor Jaguar.volg: de hoeken afgerond (twee keer Chaikin: elk hoekpunt
+    wordt vervangen door twee punten op 1/4 en 3/4 van de stukken; begin en einde blijven) en een punt om de stap_m."""
+    for _ in range(2):
+        rond = [punten[0]]
+        for a, b in zip(punten, punten[1:]):
+            rond.append((0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]))
+            rond.append((0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]))
+        rond.append(punten[-1])
+        punten = rond
+    pad = [punten[0]]
+    for a, b in zip(punten, punten[1:]):
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = max(1, round(d / stap_m))
+        pad += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+    return pad
+
+
 def rijd_route(robot, punten, richting=None, kalibreer_noord=None, vanaf_hier=False, gps="auto",
                power=250, turn_power=380, pause=1.0, ramp=1.5, creep=60, tolerance=10.0, rest=3.0,
-               gps_wacht=10.0, noord_power=NOORD_POWER):
+               gps_wacht=10.0, noord_power=NOORD_POWER, vloeiend=False):
     """De route rijden met een verbonden robot (vóór prepare). Geeft een rapport (dict) terug; zie afdrukken()."""
     lokaal = Lokaal(*punten[0])
     volger = GpsVolger(robot, lokaal)
@@ -205,14 +223,33 @@ def rijd_route(robot, punten, richting=None, kalibreer_noord=None, vanaf_hier=Fa
         x, y = x / schaal, y / schaal
         fout = ODO_FOUT * gereden * (0.25 if schaal != 1.0 else 1.0) + gereden * math.sin(math.radians(s))
         if past:                                  # 2. de positie van de GPS, als die beter is dan de wielen
-            vast = 0.0 if vanaf_hier or res["rms"] < GPS_NAUWKEURIG else GPS_VASTE_FOUT
-            fout_gps = uitgemiddeld(res) + vast
+            if res["rms"] < GPS_NAUWKEURIG:      # nauwkeurige GPS (simulator zonder fout, RTK): ruis middelt uit
+                fout_gps = uitgemiddeld(res)
+            else:
+                # Gewone GPS: de fout dwaalt in tientallen seconden (gemeten in de websimulator: 1 m in 20 s, en
+                # het robot reed twee keer een stukje bij achter die dwaling aan). Ze middelt dus niet uit over een
+                # rit, en is ook niet dezelfde als bij de start. Zonder bekend startpunt komt daar de vaste fout bij.
+                fout_gps = res["rms"] + (0.0 if vanaf_hier else GPS_VASTE_FOUT)
             if gps == "aan" or fout_gps < fout:
                 (x, y), fout, niveau = uit.naar_odo(q[0], q[1], res), fout_gps, "positie"
+                if res["rms"] >= GPS_NAUWKEURIG:
+                    fout = max(fout, 0.5)         # Dr Robot rekent een punt met deze GPS binnen 1 m als bereikt
         gebruik[niveau] += 1
         return x, y, max(0.2, 2 * fout)           # bijsturen heeft geen zin binnen de eigen onzekerheid
 
-    rijd_punten(robot, len(doelen), doel, power, turn_power, pause, ramp, creep, tolerance)
+    if vloeiend:
+        # De hele route als één pad, zonder stoppen: voor punten die dicht op elkaar liggen langs een weg of een
+        # getekende lijn. Het pad ligt vast bij het vertrek (start en noorden); de GPS kijkt alleen mee.
+        pad = vloeiend_pad([(robot.odo.x, robot.odo.y)] + [enu_naar_robot(q[0] - start[0], q[1] - start[1], b0) for q in doelen])
+        robot.phase = "1-pad"
+        robot.note(f"PLAN {robot.phase} {sum(lengtes):.4f}")
+        robot.met_pauze(lambda: robot.volg(pad, power, ramp))
+        if robot.vast:
+            raise Vastgelopen(f"vastgelopen op het pad ({robot.vast}): de route stopt hier")
+        robot.phase = "uitbollen"
+        robot.hold(2.0)
+    else:
+        rijd_punten(robot, len(doelen), doel, power, turn_power, pause, ramp, creep, tolerance)
     robot.gps_hook = None
 
     # --- rapport: alles in (oost, noord) rond het eerste punt
@@ -266,13 +303,16 @@ def afdrukken(r):
 
 def main():
     ap = argparse.ArgumentParser(description="Naar GPS-coördinaten rijden (één punt of een route)")
-    ap.add_argument("punten", nargs="+", type=coordinaat, help="breedte,lengte; het eerste is het startpunt (behalve met --vanaf-hier)")
+    ap.add_argument("punten", nargs="*", type=coordinaat, help="breedte,lengte; het eerste is het startpunt (behalve met --vanaf-hier)")
     ap.add_argument("--vanaf-hier", action="store_true", help="de start is waar het robot nu staat volgens zijn GPS; alle punten zijn doelen")
     ap.add_argument("--richting", type=float, help="kompaskoers van het robot bij de start (0 = noord)")
     ap.add_argument("--kalibreer-noord", type=float, metavar="METER", help="eerst zoveel meter rechtdoor om het noorden te vinden (standaard 6 zonder --richting)")
     ap.add_argument("--noord-power", type=int, default=NOORD_POWER, help=f"vermogen voor dat stuk (standaard {NOORD_POWER}: boven 1 m/s)")
     ap.add_argument("--gps", choices=("auto", "aan", "uit"), default="auto", help="de GPS onderweg gebruiken: auto = alleen waar hij beter is dan de wielen")
     ap.add_argument("--gps-wacht", type=float, default=10.0, help="--vanaf-hier: zoveel seconden de GPS middelen in rust (standaard 10)")
+    ap.add_argument("--vloeiend", action="store_true",
+                    help="de hele route als één pad rijden, zonder te stoppen bij de punten (punten dicht op elkaar langs een weg)")
+    ap.add_argument("--punten-bestand", help="tekstbestand met op elke regel breedte,lengte (zoals Dr Robot: lat,lon,0), in plaats van de punten op de opdrachtregel")
     ap.add_argument("--droog", action="store_true", help="alleen het plan tonen")
     ap.add_argument("--power", type=int, default=250)
     ap.add_argument("--turn-power", type=int, default=380)
@@ -281,6 +321,9 @@ def main():
     ap.add_argument("--rest", type=positive_seconds, default=3.0)
     ap.add_argument("--csv", action=argparse.BooleanOptionalAction, default=True)
     args = ap.parse_args()
+    if args.punten_bestand:
+        with open(args.punten_bestand, encoding="utf-8") as f:
+            args.punten += [coordinaat(",".join(regel.replace(";", ",").split(",")[:2])) for regel in f if regel.strip() and not regel.startswith("#")]
     if len(args.punten) < (1 if args.vanaf_hier else 2):
         ap.error("een route heeft minstens twee punten (of één doel met --vanaf-hier)")
     if args.droog and (args.richting is None or args.vanaf_hier):
@@ -306,7 +349,7 @@ def main():
         robot.precies = args.precies
         afdrukken(rijd_route(robot, args.punten, args.richting, args.kalibreer_noord, args.vanaf_hier, args.gps,
                              args.power, args.turn_power, args.pause, args.ramp, args.creep, args.tolerance, args.rest,
-                             args.gps_wacht, args.noord_power))
+                             args.gps_wacht, args.noord_power, args.vloeiend))
 
 
 if __name__ == "__main__":

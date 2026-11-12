@@ -77,6 +77,15 @@ ARC_BRAKE = 0.3           # m/s²: remmen vlak voor het eind van de boog
 ARC_STEER_MAX = 0.9       # deel van het rijvermogen dat het vermogensverschil links/rechts mag zijn (de binnenste kant staat dan bijna stil)
 ARC_KOERS_FRAC = 0.35     # deel van het vermogen dat de koersregeling (PID) extra mag bijsturen bovenop de voorspelde stuurwaarde
 ARC_LEAD = 0.3            # s: de boog stopt zoveel vroeger als het robot nog uitrolt (snelheid × tijd), net als bij draaien
+# Een pad volgen (Jaguar.volg): rechte stukken en bogen die op elkaar aansluiten in één beweging, zonder stoppen.
+PAD_VOORUIT = 0.3         # m: de kromming voor de voorspelde stuurwaarde komt uit het pad tot zo ver vooruit …
+PAD_VOORUIT_S = 0.4       # … plus zoveel seconden rijden
+PAD_RICHTING_S = 0.15     # s: de koers volgt de richting van het pad zoveel seconden vooruit
+PAD_K_NAAST = 100.0       # graden bijsturen per meter naast het pad …
+PAD_MAX_BIJ = 25.0      # … hoogstens zoveel graden
+PAD_REM_S = 1.5           # s: zo lang voor een bocht zakt het vermogen al naar ARC_POWER
+PAD_BOCHT = 0.05          # 1/m: kromming waarboven een stuk als bocht telt (straal kleiner dan 20 m)
+PAD_MAX_NAAST = 1.0       # m: verder dan dit van het pad = er klopt iets niet, stoppen
 ARC_MIN_RADIUS = 0.5      # m: kleiner kan niet zonder dat de binnenste wielen achteruit moeten
 DRIVER_FABRIEK = {"KP": 30, "KI": 10, "KD": 0, "MXPF": 100, "MXPR": 100, "MMOD": 0}
 STALL_S = 1.5             # zo lang onder STALL_FRAC van de verwachte snelheid bij vol vermogen = vastgelopen
@@ -920,6 +929,123 @@ class Jaguar:
         self.note(f"BOOGKLAAR {self.phase} {gedraaid:.2f}")
         print(f"{self.phase}: boog {radius:.2f} m, doel {angle:+.1f}°, gedraaid {gedraaid:+.1f}° volgens de gyro, fout {gedraaid - angle:+.1f}°")
         return gedraaid
+
+    def volg(self, pad, power, ramp=1.5, brake=0.4):
+        """Een pad in één beweging rijden, zonder te stoppen tussen de stukken. `pad`: punten (x, y) in het stelsel
+        van de odometrie, dicht op elkaar (enkele cm), waarvan de richting vloeiend verloopt (rechte stukken en
+        bogen die op elkaar aansluiten; geen scherpe hoeken, daar moet een skid-steer robot ter plaatse draaien).
+
+        Sturen: de koers volgt de richting van het pad vlak voor het robot, bijgestuurd met de afstand naast het pad,
+        met de voorspelde stuurwaarde voor de kromming daar (zoals arc()) en de PID op de gyrokoers voor de rest. Snelheid: optrekken, in en vlak voor
+        bochten hoogstens ARC_POWER, en afremmen naar het einde zoals een rechte stap: het vermogen gaat uit op
+        het moment dat de uitloop het robot op het eindpunt brengt. Geeft de afgelegde weg langs het pad terug."""
+        if not self.odo.klaar:
+            raise SystemExit("Een pad volgen kan niet zonder gyro (geen IMU-data in de rustmeting).")
+        self._wait_encoders()
+        self.vast = None
+        n = len(pad)
+        cum = [0.0]                                   # afstand langs het pad tot elk punt
+        for a, b in zip(pad, pad[1:]):
+            cum.append(cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+        lengte = cum[-1]
+        richting = [math.atan2(pad[min(k + 1, n - 1)][1] - pad[max(k - 1, 0)][1],
+                               pad[min(k + 1, n - 1)][0] - pad[max(k - 1, 0)][0]) for k in range(n)]
+
+        def op(afstand, vanaf):                       # eerste punt op `afstand` langs het pad
+            k = vanaf
+            while k < n - 1 and cum[k] < afstand:
+                k += 1
+            return k
+
+        def kromming(k0, k1):                         # gemiddelde kromming (1/m, + = links) tussen twee punten
+            ds = cum[k1] - cum[k0]
+            if ds < 0.05:
+                return 0.0
+            return ((richting[k1] - richting[k0] + math.pi) % (2 * math.pi) - math.pi) / ds
+
+        top = abs(int(power))
+        spoor = WHEEL_DIS * min(5.0, max(1.0, self.turn_ratio or DRIVER_STUUR_RATIO))
+        self.creep = max(60, self.creep)
+        self.note(f"PAD {self.phase} {lengte:.3f}")
+        # de vorm van het pad voor de analyse: een punt om de 10 cm (x vooruit, y links, in het stelsel van de odometrie)
+        self.note(f"PADPUNTEN {self.phase} " + " ".join(f"{q[0]:.3f};{q[1]:.3f}" for q in pad[::5] + ([pad[-1]] if (n - 1) % 5 else [])))
+        self.heading_pid.integral = 0.0
+        # dichtste punt bij het begin (na een pauze: verder vanaf waar het robot staat)
+        # Bij een rondje liggen begin en einde op dezelfde plek: van de punten die (bijna) even dichtbij zijn telt het eerste.
+        afst = [math.hypot(q[0] - self.odo.x, q[1] - self.odo.y) for q in pad]
+        dichtst = min(afst)
+        i = next(k for k in range(n) if afst[k] <= dichtst + 0.3)
+        s0 = cum[i]
+        t0 = last = time.perf_counter()
+        slow_since, p, v_uit = None, 0.0, 0.0
+        timeout = 15 + lengte / 0.05
+        try:
+            while True:
+                now = time.perf_counter()
+                dt = min(0.2, now - last)
+                last = now
+                if now - t0 > timeout:
+                    raise Stalled(f"pad niet af na {timeout:.0f} s")
+                x, y, v = self.odo.x, self.odo.y, self.odo.v
+                while i < n - 1 and (pad[i + 1][0] - x) ** 2 + (pad[i + 1][1] - y) ** 2 <= (pad[i][0] - x) ** 2 + (pad[i][1] - y) ** 2:
+                    i += 1
+                naast = math.hypot(pad[i][0] - x, pad[i][1] - y)
+                if naast > PAD_MAX_NAAST:
+                    raise Stalled(f"{naast:.1f} m naast het pad")
+                rest = lengte - cum[i]
+                if rest <= abs(v) * self.uitloop or i >= n - 1:
+                    v_uit = v
+                    break
+                # --- sturen: de richting van het pad een eindje vooruit (de motoren lopen achter), bijgestuurd met
+                # hoe ver het robot naast het pad staat. (Recht op een punt verderop mikken sneed de bochten 17 cm af.)
+                vooruit = PAD_VOORUIT + PAD_VOORUIT_S * abs(v)
+                j = op(cum[i] + vooruit, i)
+                jr = op(cum[i] + PAD_RICHTING_S * abs(v), i)
+                naast_links = -(x - pad[i][0]) * math.sin(richting[i]) + (y - pad[i][1]) * math.cos(richting[i])
+                doel = math.degrees(richting[jr]) + max(-PAD_MAX_BIJ, min(PAD_MAX_BIJ, -PAD_K_NAAST * naast_links))
+                fout = (doel - self.heading + 180.0) % 360.0 - 180.0
+                k_hier = kromming(i, j)
+                # --- snelheid
+                bocht = max(abs(k_hier), abs(kromming(j, op(cum[i] + vooruit + PAD_REM_S * max(abs(v), 0.3), j))))
+                grens = min(top, ARC_POWER) if bocht > PAD_BOCHT else top
+                p_ramp = top * min(1.0, (now - t0) / ramp) if ramp > 0 else top
+                p_rem = max(self.creep, math.sqrt(2 * brake * max(0.0, rest - abs(v) * self.uitloop)) / self.k_v)
+                gewenst = min(grens, p_ramp, p_rem)
+                # geen sprongen in het vermogen: een bocht in- en uitrijden gaat geleidelijk
+                p += max(-2.0 * top * dt, min(top / max(ramp, 0.1) * dt, gewenst - p)) if p < gewenst or gewenst >= grens else gewenst - p
+                pi = int(max(0.0, p))
+                if pi >= 0.9 * grens and now - t0 > ramp and abs(v) < STALL_FRAC * max(self.k_v, 0.6 * K_V) * pi:
+                    slow_since = slow_since or now
+                    if now - slow_since > STALL_S:
+                        raise Stalled(f"{abs(v):.2f} m/s bij vermogen {pi}")
+                else:
+                    slow_since = None
+                ff = max(-ARC_STEER_MAX, min(ARC_STEER_MAX, k_hier * spoor / 2))
+                pid = self.heading_pid.update(self.heading + fout, self.heading, self.yaw_rate, dt, ARC_KOERS_FRAC * max(pi, self.creep))
+                steer = int(max(-ARC_STEER_MAX * pi, min(ARC_STEER_MAX * pi, ff * pi + pid)))
+                self._guard(pi)
+                self._motor(pi, steer)
+                time.sleep(LOOP)
+        except Stalled as e:
+            self._motor(0)
+            print(f"{self.phase}: VASTGELOPEN - {e}. Pad afgebroken.")
+            self.note(f"VAST {self.phase}")
+            self.vast = str(e)
+        self._motor(0)
+        pos_uit = self.odo.positie()
+        pos = self._settled()
+        if abs(v_uit) > 0.05 and not self.vast:          # uitloop bijleren, zoals bij een rechte stap
+            gemeten = (pos - pos_uit) / abs(v_uit)
+            if 0 <= gemeten < 2:
+                self.uitloop = min(1.0, max(0.05, 0.3 * self.uitloop + 0.7 * gemeten))
+        eind = math.hypot(pad[-1][0] - self.odo.x, pad[-1][1] - self.odo.y)
+        self.target_heading = self.heading + ((math.degrees(richting[-1]) - self.heading + 180.0) % 360.0 - 180.0)
+        self.line = (self.odo.x, self.odo.y)
+        self.heading_pid.integral = 0.0
+        self.note(f"PADKLAAR {self.phase} {cum[i] - s0:.4f}")
+        print(f"{self.phase}: pad van {lengte:.2f} m in één beweging, {eind * 100:.1f} cm van het eindpunt, "
+              f"koers {self.heading - self.target_heading:+.1f}° naast de eindrichting (schatting)")
+        return cum[i] - s0
 
     def _drive_with_driver(self, goal, sign, power, ramp, brake, tolerance):
         """Tot DRIVER_MARGIN voor het doel rijdt dit programma met de gyro; het laatste stuk regelt de driver."""

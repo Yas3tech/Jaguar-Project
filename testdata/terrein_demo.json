@@ -1,0 +1,14 @@
+{
+  "uitleg": "Demo-parcours voor sim_robot.py: een slinger van 28 m met vijf bochten, over stenen en door plassen. Alles in meters vanaf de start: x = oost, y = noord. Het robot kijkt bij de start naar het noorden (b0 = 0). 'route' kun je in de ontwerper plakken (Voorbeelden, Route als tekst).",
+  "zones": [
+    {"soort": "stenen", "x": 0.0, "y": 2.5, "r": 1.0},
+    {"soort": "plas",   "x": 2.5, "y": 6.0, "r": 0.8},
+    {"soort": "stenen", "x": 5.0, "y": 3.0, "r": 1.1},
+    {"soort": "plas",   "x": 7.5, "y": 0.0, "r": 0.8},
+    {"soort": "stenen", "x": 10.0, "y": 3.0, "r": 1.0}
+  ],
+  "route": {"modus": "binnen", "b0": 0, "power": 250, "bogen": "vloeiend",
+            "pts": [[0, 0, 0], [0, 6, 1.5], [5, 6, 1.5], [5, 0, 1.5], [10, 0, 1.5], [10, 6, 0]]},
+  "stappen": [["vooruit", 4.5], ["boog", 1.5, -90], ["vooruit", 2.0], ["boog", 1.5, -90], ["vooruit", 3.0],
+              ["boog", 1.5, 90], ["vooruit", 2.0], ["boog", 1.5, 90], ["vooruit", 4.5]]
+}
