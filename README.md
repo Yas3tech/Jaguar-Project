@@ -2,7 +2,7 @@
 
 Software voor de Dr Robot Jaguar 4x4: rijden op afstand, op centimeters, een route volgen naar GPS-coördinaten, obstakels zien met de camera, live meekijken en elke rit achteraf analyseren.
 
-**Demo:** [video van de simulatie](docs/demo/robot_video_simulatie.mp4)
+**Demo's:** [video van de rit](docs/demo/robot_video_simulatie.mp4) · [video van de analyse](docs/demo/robot_analyse_video.mp4)
 
 ## Wat je nodig hebt
 
@@ -138,15 +138,93 @@ De fysieke noodstop blijft de echte noodstop.
 | Websimulator robotics.dinno.be | `.\start_websim.ps1` (zie [testen/](jaguar/testen/README.md)) |
 | Tests | `python -m jaguar.testen.test_rijden` (~4 min), `test_gps_route` (~6 min), `test_bediening` (~2 min) |
 
-## Resultaten en wat nog niet getest is
+## De ε-baan in de websimulator (lokale API)
 
-| Waar | Gemiddeld naast de lijn | Hoogstens |
-|---|---|---|
-| sim_robot, epsilon-baan (echte positie) | 3,9 cm | 11,6 cm |
-| websimulator, epsilon-baan (volgens het robot) | 8 cm | 27 cm |
+![De ε-baan gereden in de websimulator](docs/websimulator/baan_gereden.png)
 
-- **Op het echte robot gemeten:** alleen `--precies` (1 en 5 m binnen 1 à 3 mm volgens de encoders).
-- **Niet op het echte robot getest:** routes in één beweging, bogen, GPS-routes, de camera. Eerst kort, traag en met de noodstop bij de hand.
+De simulator van robotics.dinno.be heeft een Jaguar 4x4 in een park met een aarden ε-pad (bord 12). De **Training API** ([github.com/mdequanter/robotSimulatorAPI](https://github.com/mdequanter/robotSimulatorAPI), `node server.mjs`) draait diezelfde simulator op de eigen pc, in Chrome, achter een HTTP-API op `localhost:8780`.
+
+```text
+gps_route.py ──TCP 127.0.0.1:10001──> testen/api_brug.py ──HTTP localhost:8780──> server.mjs ──> simulator
+```
+
+Onze code weet niet dat het een simulator is: de brug doet zich voor als het echte robot.
+
+### Zo rijd je de baan
+
+Eenmalig: `setx ROBOTSIM_KEY "rsk_..."` (de sleutel van je account; nooit in een bestand van het project).
+
+**Terminal A**: simulator en brug starten.
+
+```powershell
+cd C:\Dev\Jaguar-Project
+Set-ExecutionPolicy -Scope Process Bypass
+.\start_websim.ps1 -Plaats "-3.4,0,90"
+```
+
+`-Plaats "x,z,koers"` zet het robot neer: 3,4 m ten westen van de oorsprong, met de neus naar het noorden (in de simulator is 0° = oost, 90° = noord). Daar begint het aarden pad, en daar begint ook het eerste GPS-punt van de route. Staat het robot ergens anders, dan rijdt het de baan verschoven.
+
+**Terminal B**: de route rijden en daarna analyseren.
+
+```powershell
+cd C:\Dev\Jaguar-Project
+$env:JAGUAR_WIELSTRAAL = "0.135"
+python -m jaguar.rijden.gps_route --punten-bestand testdata/websim_epsilon_baan.txt --richting 0 --vloeiend --ip 127.0.0.1
+python -m jaguar.analyse.rit
+```
+
+| Optie | Betekenis |
+|---|---|
+| `JAGUAR_WIELSTRAAL=0.135` | de wielstraal van de simulator; het echte robot is gekalibreerd op 0,1336 m |
+| `--punten-bestand` | [testdata/websim_epsilon_baan.txt](testdata/websim_epsilon_baan.txt): 87 GPS-punten (breedte,lengte), om de 0,5 m langs de middellijn van het pad |
+| `--richting 0` | de kompaskoers bij de start (0 = noord). De GPS zegt waar het robot is, niet waar het naartoe kijkt. Dit is hetzelfde noorden als de 90 van `-Plaats`, in een andere conventie |
+| `--vloeiend` | alle punten als één vloeiende lijn, zonder stoppen; zonder deze optie rijdt het punt per punt en draait het ter plaatse in elke hoek |
+| `--ip 127.0.0.1` | verbinden met de brug op deze pc; voor het echte robot is dat `192.168.0.60` (de standaard) |
+
+Leg je het robot ergens anders neer, pas dan `-Plaats` en `--richting` samen aan.
+
+### Hoe het robot het pad volgt
+
+1. **Coördinaten naar meters:** het eerste punt is (0, 0); elk punt wordt (oost, noord) in meter, en met `--richting` (vooruit, links) voor het robot.
+2. **Eén pad:** de hoeken worden afgerond en de lijn krijgt een punt om de 2 cm.
+3. **Waar ben ik:** afstand uit de 4 wielen, koers uit de gyro (geen GPS).
+4. **Sturen, elke 0,05 s:** het dichtste punt op het pad zoeken; als doelkoers de richting van het pad 0,15 s verderop nemen, plus 100° per meter naast de lijn (hoogstens 25°); de buitenste wielen meer vermogen geven in een bocht; vertragen voor bochten en remmen naar het laatste punt.
+5. **De GPS** kijkt alleen mee: na de rit zegt hij of het noorden en de afstand klopten.
+
+### Waar het robot is, drie bronnen
+
+| Bron | Komt van | Ziet onze code het? | Waarvoor |
+|---|---|---|---|
+| GPS | het veld `gps` van de simulator, door de brug omgezet naar `$GPRMC` | ja | het noorden en de afstand controleren |
+| Wielen en gyro | encoders en IMU van de simulator | ja | sturen |
+| Echte positie | het veld `pose` van de simulator, door de brug bewaard in `ritten/websim_spoor.csv` | nee | achteraf meten hoe ver het robot naast de lijn reed |
+
+### De analyse
+
+`python -m jaguar.analyse.rit` neemt de nieuwste CSV in `ritten/`:
+
+1. speelt alle ruwe regels opnieuw af door dezelfde odometrie als tijdens het rijden;
+2. tekent het gereden spoor uit afstand en gyrokoers, naast het gevraagde pad (dat staat in de CSV als `PADPUNTEN`);
+3. meet voor elk punt de afstand tot de lijn: gemiddeld, hoogstens, en hoe ver het van het eindpunt stopte;
+4. schrijft `ritten/<rit>_analyse.json` en werkt `dashboard/dashboard.html` bij (figuur "Route in één beweging", slip, gebeurtenissen, 3D).
+
+Dat dashboard toont waar het robot **denkt** te zijn. De figuur bovenaan deze sectie (`docs/websimulator/teken_baan.py`) toont de **echte** positie uit `websim_spoor.csv`.
+
+**Wat de brug doet** ([testen/api_brug.py](jaguar/testen/api_brug.py)):
+
+- vraagt de simulator 50 stappen van 0,02 s per seconde, in echte tijd;
+- geeft onze commando's (`PING`, `MMW !M ..`) bij elke stap mee als `{"tcp": [...]}`;
+- maakt van elke waarneming de regels die het echte robot stuurt: IMU (50 Hz), encoders, batterij en `$GPRMC` (5 Hz), E-Stop (1 Hz);
+- keert het teken van de gyro-Y-as om: die draait in de simulator andersom dan op het echte robot.
+
+**Wat er aan de API veranderd is: niets.** De lokale kopie `C:\Dev\robotSimulatorAPI` is gelijk aan GitHub (`main`, commit `585e8f6`), zonder eigen wijzigingen. We gebruiken alleen bestaande aanroepen: `POST /api/envs` (robot `jaguar`, wereld `park`), `POST /api/envs/{id}/step` (acties `tcp` en `place`) en `GET /api/envs/{id}/frame`. Alles wat nodig was om er een Jaguar van te maken, zit aan onze kant in `api_brug.py`, plus de wielstraal van de simulator (0,135 m).
+
+**Resultaat** (rit van 19 november):
+
+| | Naast de middellijn gemiddeld | Hoogstens | Gestopt van het doel |
+|---|---|---|---|
+| Websimulator, ε-baan (42,1 m) | 4,9 cm | 12,3 cm | 8,5 cm |
+| sim_robot, zelfde baan | 3,9 cm | 11,6 cm | 1 cm |
 
 ## Mappen
 
