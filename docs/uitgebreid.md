@@ -1,191 +1,407 @@
-# Jaguar-Project
+# Jaguar-Project: uitgebreide uitleg
 
-Robot Dr Robot Jaguar 4x4: rijden met slipbewuste odometrie, live meekijken, ritten opslaan en achteraf analyseren in een dashboard.
+De korte versie staat in de [README](../README.md). Hier staat hoe elk deel werkt, met de getallen uit de code. Elke map heeft daarnaast een eigen README.
 
-## Mappen
+**Inhoud**
 
-Elke map heeft zijn eigen README met uitleg.
+1. [Het robot en de verbinding](#1-het-robot-en-de-verbinding)
+2. [Waar is het robot? De odometrie](#2-waar-is-het-robot-de-odometrie)
+3. [Rechtdoor rijden](#3-rechtdoor-rijden)
+4. [Draaien ter plaatse](#4-draaien-ter-plaatse)
+5. [Een parcours](#5-een-parcours)
+6. [Een pad volgen in één beweging](#6-een-pad-volgen-in-één-beweging)
+7. [Naar GPS-coördinaten](#7-naar-gps-coördinaten)
+8. [De camera en obstakels](#8-de-camera-en-obstakels)
+9. [Veiligheid en batterij](#9-veiligheid-en-batterij)
+10. [Bediening vanuit de browser](#10-bediening-vanuit-de-browser)
+11. [Live meekijken en Grafana](#11-live-meekijken-en-grafana)
+12. [Opslaan, analyse en dashboard](#12-opslaan-analyse-en-dashboard)
+13. [Kalibreren](#13-kalibreren)
+14. [Zonder robot: simulatoren en tests](#14-zonder-robot-simulatoren-en-tests)
+15. [Bestanden in config/](#15-bestanden-in-config)
 
-```
-Jaguar-Project/
-├─ jaguar/              alle Python-code (starten met  python -m jaguar.<map>.<bestand>)
-│  ├─ kern/             robot.py (verbinding, motoren) en odometrie.py (afstand, koers, slip)
-│  ├─ rijden/           rechtdoor, heen_en_terug, parcours en bediening (rijden vanuit de browser)
-│  ├─ analyse/          rit.py: een rit achteraf analyseren en het dashboard maken
-│  ├─ navigatie/        GPS: coördinaten naar meters, het noorden, een route van GPS-punten rijden
-│  ├─ kalibratie/       kalibreer.py, gps_afstand.py (de GPS als meetlat) en test_sondewiel.py: wielstraal en gyroschaal meten
-│  ├─ live/             de live webpagina (view.py, pagina.html, opties.json, mqtt_stream.py)
-│  ├─ camera/           obstakel.py: obstakels zien met de camera (standaard uit, aan in Opties)
-│  └─ testen/           nep_robot.py (opname afspelen), sim_robot.py (gesimuleerde robot) en de tests
-├─ ritten/              CSV's en analyses van alle ritten
-├─ dashboard/           dashboard.html (resultaat) en template.html (bron)
-├─ config/              kalibratie.json (gemeten wielstraal), leerwaarden.json, camera_kalibratie.json
-├─ grafana/             Grafana, InfluxDB en MQTT (docker compose)
-├─ testdata/            demo_rit.csv voor de nep-robot
-└─ docs/robot/          handleidingen en netwerkgegevens van de robot
-```
+---
 
-Alle commando's draai je vanuit de projectmap, bijvoorbeeld `python -m jaguar.rijden.rechtdoor --power 250 --distance 2`.
+## 1. Het robot en de verbinding
 
-## Rijden en opslaan
+| Onderdeel | Gegevens |
+|---|---|
+| Robot | Dr Robot Jaguar 4x4, skid-steer (geen stuur: links en rechts verschillend snel), 61,5 × 57,3 cm |
+| Wifi | `DriJaguar` (adressen en login in `docs/robot/Notes.txt`) |
+| Besturing | TCP `192.168.0.60:10001`, tekstregels die eindigen op CRLF |
+| Motordrivers | twee Roboteq-borden: `MM0` (voorwielen) en `MM1` (achterwielen) |
+| IMU | gyro en accelerometer, 50 Hz |
+| GPS | Garmin GPS 18x-5Hz, 5 posities per seconde |
+| Camera | Axis, `192.168.0.65:8081`, MJPEG |
 
-Beide scripts slaan standaard een CSV op in `ritten`. Gebruik `--no-csv` om dit uit te schakelen; `--csv` om het expliciet aan te zetten.
+**Wat het robot stuurt**
+
+| Regel | Hoe vaak | Inhoud |
+|---|---|---|
+| `#nr,YAW,..,GYRO,x,y,z,ACC,x,y,z,..` | 50 Hz | ruwe gyro en accelerometer (counts) met een volgnummer |
+| `MM0 C=links:rechts`, `MM1 C=..` | 5 Hz (vaste klok van 0,2 s) | encoderstand van de 4 wielen |
+| `MM0 V=..` | 5 Hz | spanningen, waaronder de batterij |
+| `$GPRMC,..` | 5 Hz | breedte, lengte, snelheid en koers over de grond, fix |
+| `MM0 FF=..` | 1 Hz | foutvlaggen, waaronder de E-Stop |
+
+**Wat de laptop stuurt** ([kern/robot.py](../jaguar/kern/robot.py))
+
+- elke 100 ms `PING` en `MMW !M <links> <-rechts>`: open-loop vermogen, -1000..1000. Komt er geen PING meer, dan zet de controller de motoren uit (watchdog);
+- `MMW !MG` geeft de E-Stop vrij bij de start, `MMW !EX` zet hem terug aan na elke rit.
+
+De drivers laten soms een commando vallen of plakken twee regels aan elkaar ("`!P 2 -474PING`"). Daarom wacht elk drivercommando op zijn bevestiging en wordt het herhaald.
+
+**De rustfase.** Elke rit begint met 3 s stilstaan: het script meet dan de gyrobias en de zwaartekrachtrichting. Beweegt het robot in die tijd, dan meet het opnieuw.
+
+**De tijd.** De wifi houdt pakketten soms 0,5 tot 0,7 s vast en levert ze dan samen af. Het script telt de tijd daarom met de volgnummers van de IMU (50 Hz), niet met het moment van ontvangst.
+
+---
+
+## 2. Waar is het robot? De odometrie
+
+[kern/odometrie.py](../jaguar/kern/odometrie.py) rekent afstand, koers en positie uit. Dezelfde code draait live in elk rijscript en achteraf in de analyse.
+
+**Koers:** de gyro (Z-as), min de bias uit de rustfase. Het kompas is onbruikbaar: de motoren storen het.
+
+**Afstand, per encoderpakket (5 Hz):**
+
+1. **Snelheid per wiel** = pulsen ÷ (n × 0,2 s). Met de vaste klok van de controller is dat 3,5× minder ruizig dan met de ontvangsttijd.
+2. **Per kant:** voor- en achterwiel zijn het eens (verschil ≤ 0,10 m/s + 5 %) → gemiddelde. Anders telt het wiel dat het dichtst bij de voorspelling van de IMU ligt; het andere slipt.
+3. **Links tegen rechts:** het verschil moet passen bij de draaisnelheid van de gyro × de spoorbreedte. Bij skid-steer is het altijd tot 2,5× groter (de wielen schuiven zijwaarts in een bocht). Pas een groter verschil is een slippende kant.
+4. **Kalman-filter** op [snelheid, versnellingsbias]: de accelerometer voorspelt (met de helling eraf, uit de gyro-Y), de wielen meten. Ligt de wielsnelheid meer dan 0,25 m/s (+ 3σ) van de voorspelling, dan worden de wielen verworpen.
+5. **Wielen verworpen:** de IMU-integratie telt, begrensd tussen 0 en het snelste wiel. Dat heet "IMU overbrugt". Na 0,6 s heet het "afstand onzeker"; na 1 s stopt het rijscript.
+6. **Stilstand** (geen pulsen, trilling < 0,03 g): snelheid 0, gyrobias en helling worden bijgeleerd.
+7. **Wielen in de lucht:** snelle wielen zonder trilling (< 0,04 g) en zonder dat de IMU het robot voelt optrekken, of meer dan 60° gekanteld.
+
+**Positie:** x += ds · cos(koers), y += ds · sin(koers). x = vooruit, y = links, vanaf de start.
+
+**Waarop dat gebaseerd is** (ritten van 2 en 8 oktober):
+
+- voor- en achterwiel hebben in schone stukken dezelfde snelheid (verschil < 0,04 m/s bij p90);
+- de IMU alleen is na 0,2 s 1,5 cm fout, na 0,6 s 7 cm, na 1 s 17 cm, na 2 s 70 cm: goed om kort te overbruggen, niet om afstand te meten;
+- wielen die de grond niet raken trillen ongeveer 12× minder (0,035 g tegen 0,43 g);
+- rit `134323`: na een botsing kantelde het robot op zijn neus en telden de encoders nog 7 m terwijl het stilstond. De odometrie hield daarvan −0,17 m over.
+
+**Grens:** slippen alle vier de wielen evenveel aan constante snelheid (gras, zand), dan zijn de wielen het eens en meet de accelerometer niets. In de simulatie gaf 15 % slip over 1,5 m 26 cm te veel. Daarvoor dienen de GPS-schaal (§7) en de proef met vrijlopende meetwielen (§13).
+
+---
+
+## 3. Rechtdoor rijden
 
 ```powershell
-python -m jaguar.rijden.rechtdoor --power 250 --distance 2.0
+python -m jaguar.rijden.rechtdoor --power 250 --distance 5
 python -m jaguar.rijden.heen_en_terug --power 250 --distance 1.5 --pause 1.5
-python -m jaguar.rijden.heen_en_terug --power 150 --duration 2 --ramp 2      # oude manier: op tijd
-python -m jaguar.rijden.rechtdoor --power 150 --distance 1 --no-csv
-python -m jaguar.analyse.rit
-python -m jaguar.analyse.rit ritten/rit_20261002_100122.csv
 ```
 
-`--distance` (standaard) is de afstand in meter volgens de slipbewuste odometrie (zie hieronder), voor heen/terug **per richting**. De robot bouwt het vermogen op over `--ramp` seconden (standaard 1,5), remt af en zet het vermogen uit op het moment dat de uitloop het robot precies op het doel brengt. Dat is **één vloeiende beweging**, zonder kruipstoten. De uitloop (hoeveel het robot nog rolt na vermogen 0) leert het na elke stop bij. Het rijdt dan nooit achteruit om een paar centimeter goed te maken: staat het te kort, dan rijdt het hoogstens twee keer een stukje vooruit; alleen een overschot van meer dan 10 cm wordt teruggereden. De toegelaten fout is `--tolerance` mm (standaard **10**, was 3). Met `--precies` werkt de oude manier: stoppen op de millimeter met kruipstoten (`--creep`, standaard 60), heen en weer aan het eind. Na elk segment toont het script het doel, de meting en de fout.
+**Eén beweging:** optrekken over `--ramp` seconden (standaard 1,5), rijden, afremmen, en het vermogen uit zetten op het moment dat het uitrollen het robot precies op het doel brengt. Het remvermogen volgt √(2 · rem · resterende weg) ÷ (snelheid per vermogen).
 
-Met `--precies` (en alleen op de echte robot) regelt het laatste stuk (30 cm) de motordriver zelf: `robot.py` zet hem even in positiemodus (Roboteq `MMOD 3`) en geeft elk wiel een absoluut doel in pulsen, waarna de driver het wiel 1000 keer per seconde op de puls nauwkeurig naar dat doel regelt (PID 255/0/120, 40 % vermogen). Daarvoor houdt het script met de gyro de koers vast. Gemeten op de robot: 1 m en 5 m, vooruit en achteruit, binnen 1 à 3 mm van het doel (volgens de encoders). Elk driver-commando wacht op zijn bevestiging en wordt herhaald, want de drivers laten commando's vallen als ze te snel na elkaar komen. Daarna zet het script de driver terug op de fabrieksinstelling (open loop, PID 30/10/0). Mislukt het, dan rijdt het zoals vroeger met kruipstoten. Uitzetten kan met `JAGUAR_DRIVER=0`; de nep-robot gebruikt het niet. Over de hele afstand laten we de driver niet regelen: elk wiel gaat dan apart naar zijn doel en het robot draait weg (28° in 5 m buiten). `python -m jaguar.kalibratie.test_driver` leest de driverinstellingen uit (alleen lezen).
+- **Uitloop:** hoe ver het robot nog rolt na vermogen 0. Wordt na elke stop bijgeleerd (30 % oud, 70 % nieuw).
+- **Te kort** (meer dan `--tolerance`, standaard 10 mm): hoogstens twee keer een stukje vooruit.
+- **Te ver:** alleen een overschot van meer dan 10 cm wordt teruggereden.
+- **`--precies`:** stopt 2 cm voor het doel en doet de rest met kruipstoten (`--creep`, standaard 60). Op het echte robot regelt de driver de laatste 30 cm zelf in positiemodus (Roboteq `MMOD 3`, PID 255/0/120, 40 % vermogen); gemeten: 1 m en 5 m binnen 1 à 3 mm volgens de encoders. Daarna terug naar de fabrieksinstelling (open loop, PID 30/10/0). Uitzetten met `JAGUAR_DRIVER=0`.
 
-Grenzen van die precisie: één encoderpuls is 2,8 mm wielomtrek, en de encoders komen maar met ongeveer 5 Hz binnen. Als de robot bij vol vermogen 1,5 s nauwelijks vooruitgaat (vastgelopen, obstakel), breekt het script het segment af. Het stopt ook als de robot meer dan 35° kantelt t.o.v. de start, of als de wielen langer dan 1 s draaien zonder dat de robot rijdt (opgetild, op zijn neus, tegen een obstakel). Beweegt de robot tijdens de rustmeting, dan meet het script de rust opnieuw.
+**Rechtdoor blijven (cascade-PID)**
 
-Een parcours met meerdere stappen en draaien ter plaatse:
+- Buiten: de zijdelingse afwijking geeft een gewenste koers, 20° per meter, hoogstens 5°, terug naar de startlijn.
+- Binnen: een PID op de gyrokoers geeft het vermogensverschil links/rechts. P = 6 per graad, I = 4 per graad·s (een kant die zwakker trekt; gespiegeld bij achteruit), D = 0,4 per graad/s (op de gemeten draaisnelheid, dempt slingeren).
+- Het verschil is begrensd op 30 % van het rijvermogen; de I stopt met groeien zolang dat zo is (anti-windup).
+- Zonder regeling draaide het robot bij het optrekken 3,6° weg en stond het na 3 m 17 cm naast de lijn.
+
+**Eindkoers:** wijkt de koers aan het eind meer dan 1,5° af, dan draait het robot die recht.
+
+**Richting:** `--distance -3` of `--power -250` is achteruit. `--duration` rijdt op tijd zoals vroeger.
+
+---
+
+## 4. Draaien ter plaatse
+
+- Op de gyro: het vermogensverschil zakt mee met de resterende hoek, en het robot stopt vroeger volgens zijn draaisnelheid (draai-uitloop, bijgeleerd).
+- Daarna corrigeert het met korte stoten, alleen als de fout groter is dan 1° (0,4° met `--precies`). Het leert hoeveel graden een stoot geeft en stopt als de kleinste stoot de fout alleen groter zou maken.
+- Komt het niet in beweging, dan verhoogt het het minimumvermogen stap voor stap.
+- Na elke draai vergelijkt het gyro en encoders (`RATIO` in de CSV) en meldt het een plotse verandering van meer dan 15 %.
+- Zo juist als de gyroschaal: kalibreren met `test_sondewiel draai` (§13).
+
+---
+
+## 5. Een parcours
 
 ```powershell
 python -m jaguar.rijden.parcours vooruit:5 achteruit:4.5 rechts:90 vooruit:1.5
-python -m jaguar.rijden.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2      # vierkant
+python -m jaguar.rijden.parcours v:2 l:90 v:2 l:90 v:2 l:90 v:2
 ```
 
-Na de vloeiende draai corrigeert hij met korte stoten alleen als de fout groter is dan 1° (`TURN_FINE`; met `--precies` tot 0,4°). Binnen 1° volgt geen stoot meer: de koers is absoluut en het volgende rechte stuk stuurt een graad vanzelf weg. De robot leert hoeveel graden een stoot geeft en stopt als de kleinste stoot de fout alleen zou vergroten. De bijgeleerde regelwaarden (vermogen→snelheid, kruipstoot, draaistoot) staan na een rit in `config/leerwaarden.json` en worden bij de volgende rit weer geladen, zodat je niet elke keer opnieuw hoeft in te regelen. Na elke draai vergelijkt het script gyro en encoders (`RATIO` in de CSV) en meldt het als die verhouding plots meer dan 15 % verandert.
+- Elke rechte stap rijdt naar het **geplande hoekpunt**, gerekend vanaf de start, en volgt de geplande lijn. Een fout van de vorige stap (te ver, te kort, naast de lijn) werkt de volgende vanzelf weg, tot 50 cm per stap.
+- Bogen uit de ontwerper rijden "in stukjes" (rechte stukjes van 10° met draaien ertussen) of "vloeiend" (`Jaguar.arc()`: straal minstens 0,5 m, vermogen hoogstens 220).
+- Stukken die vloeiend op elkaar aansluiten worden samen één pad (§6), zonder stoppen.
+- Wat het parcours doet bij een obstakel: zie §8.
 
-Rechte stappen rijden zoals hierboven. Draaien gebeurt ter plaatse op de gyro: het vermogensverschil zakt met de resterende hoek, de robot stopt vroeger volgens zijn draaisnelheid (uitloop) en corrigeert met korte stoten tot op 1°. Komt hij niet in beweging, dan verhoogt hij het minimumvermogen stap voor stap. Rechte stappen rijden naar het geplande hoekpunt (gerekend vanaf de start) en volgen de geplande lijn. Een afwijking van de vorige stap (te ver, te kort, naast de lijn) werkt de volgende stap dus vanzelf weg, tot 50 cm per stap; een grotere correctie vertrouwt het script niet. Na de laatste stap zet het de koers recht als die meer dan 1° afwijkt. Hetzelfde doen `rechtdoor` en `heen_en_terug` aan het eind van elk segment (`eindkoers`). Dat corrigeert alles wat de odometrie meet; wat ze niet ziet (gyroschaal, wielstraal op een andere ondergrond) blijft staan. Draaien is zo juist als de gyroschaal: kalibreer eerst met `python -m jaguar.kalibratie.test_sondewiel draai`. Het dashboard toont de geplande route en de gereden route op ware schaal.
+---
 
-Richting: `--distance -3` of `--power -250` rijdt achteruit. Bij heen/terug betekent een negatief vermogen of een negatieve afstand: eerst achteruit, dan terug vooruit.
+## 6. Een pad volgen in één beweging
 
-Rechtdoor houden met een PID-regelaar (cascade): tijdens de rustfase meet het script de gyrobias. Tijdens het rijden geeft de zijdelingse afwijking een gewenste koers (20° per meter, max. 5°, terug naar de startlijn). Een PID op de gyrokoers zet die om in een vermogensverschil tussen links en rechts:
-- P (`KP_HEADING` = 6 per graad) reageert op de koersfout;
-- I (`KI_HEADING` = 4 per graad·s) compenseert een kant die blijvend zwakker trekt; bij achteruit rijden wordt die geleerde waarde gespiegeld;
-- D (`KD_HEADING` = 0,4 per graad/s, op de gemeten draaisnelheid) dempt overslingeren.
+`Jaguar.volg(pad, vermogen)` in [kern/robot.py](../jaguar/kern/robot.py) rijdt een lijst punten (om de 2 cm) zonder te stoppen.
 
-Het verschil is begrensd op 30 % van het rijvermogen (60 % bij de kruipstoten). De integrator stopt met groeien zolang de uitgang begrensd is (anti-windup). Zonder regeling draaide de robot bij het optrekken 3,6° weg en eindigde hij 17 cm naast de lijn na 3 m. Na elk segment toont het script de koers en de geschatte afstand tot de startlijn. Slingert de robot heen en weer: verlaag `KP_HEADING`. Blijft hij scheef: verhoog `KI_HEADING`.
+**Elke 0,05 s:**
 
-`--duration` rijdt op tijd zoals vroeger. `--power` is een open-loop motoropdracht en het maximum tijdens het rijden, geen snelheid in m/s. Het bereik is 0..1000 voor heen/terug en -1000..1000 voor rechtdoor (negatief = achteruit).
+1. **Waar op het pad:** het robot schuift op naar het dichtste punt (alleen vooruit langs het pad).
+2. **Hoe ver ernaast:** de afstand loodrecht op het pad, + = links. Meer dan 1 m: stoppen, er klopt iets niet.
+3. **Doelkoers** = richting van het pad op 0,15 s rijden verderop (`PAD_RICHTING_S`) + 100° per meter naast het pad (`PAD_K_NAAST`), hoogstens 25° (`PAD_MAX_BIJ`).
+4. **Voorspelde stuurwaarde:** de kromming van het pad tussen hier en 0,3 m + 0,4 s rijden verderop bepaalt hoeveel sneller de buitenste wielen draaien (hoogstens 90 % verschil).
+5. **De gyro-PID** stuurt de rest bij, hoogstens 35 % van het vermogen extra.
+6. **Snelheid:** optrekken over `ramp`; 1,5 s voor een bocht (kromming boven 0,05 per meter, straal kleiner dan 20 m) al terug naar hoogstens 220; afremmen naar het laatste punt zoals bij rechtdoor. Het vermogen verandert geleidelijk, nooit in sprongen.
 
-## Afstand kalibreren
+**Waarom deze waarden** (ε-baan van 42 m, echte positie in `sim_robot`):
 
-De encoders rekenen met een nominale wielstraal van 0,135 m. De echte rolstraal van de noppenbanden hangt af van de ondergrond en de bandenspanning. Kalibreren gaat zo:
-
-```powershell
-python -m jaguar.rijden.rechtdoor --power 250 --distance 3
-# meet met de rolmeter hoe ver één vast punt van de robot verplaatst is, bv. 2,968 m
-python -m jaguar.kalibratie.kalibreer 2.968
-```
-
-Dit schrijft `config/kalibratie.json`. De rijscripts en de analyse gebruiken daarna die straal. Verwijder het bestand om terug te gaan naar 0,135 m. Kalibreer op een harde, vlakke ondergrond: op gras zou de straal de slip mee opnemen. `python -m jaguar.kalibratie.kalibreer 6.41 --vergelijk` slaat niets op en toont per methode (rijscript, gemiddelde 4 wielen, slipbewust, voor- en achterwielen) de fout t.o.v. de rolmeter.
-
-Met de GPS als meetlat kun je ook controleren of een gevraagde meter een echte meter is:
-
-```powershell
-python -m jaguar.kalibratie.gps_afstand --distance 20           # rijdt 20 m en vergelijkt met de GPS
-python -m jaguar.kalibratie.gps_afstand --distance 20 --bewaar  # past de wielstraal alleen aan als de meting goed genoeg is
-```
-
-Met de GPS van het robot (meters fout) is 20 m vaak te ruw; het script zegt dat dan en bewaart niets. Gebruik dan de rolmeter (`kalibreer.py`).
-
-## Afstand op elke ondergrond
-
-`jaguar/kern/odometrie.py` berekent de afgelegde weg uit de vier wielencoders, getoetst aan de gyro en de accelerometer. Dezelfde code draait live in de rijscripts en achteraf in `jaguar/analyse/rit.py`. Op een schone ondergrond is het resultaat gelijk aan het gemiddelde van de vier wielen; het verschil verschijnt pas als er iets slipt.
-
-Wat de ritten van 2 en 8 oktober lieten zien (en waarop de drempels gebaseerd zijn):
-
-- De motion controller stuurt de encoders op een vaste klok van 0,2 s; de wifi verschuift de ontvangsttijd ±20 ms. Snelheid = pulsen ÷ (n × 0,2 s) is daardoor 3,5× minder ruizig (0,019 i.p.v. 0,067 m/s).
-- Soms houdt de wifi pakketten 0,5–0,7 s vast en levert ze dan samen (volgorde blijft juist). Het rijscript telt de tijd daarom met de IMU-volgnummers (50 Hz), niet met de ontvangsttijd. De eerste versie deed dat niet: in de ritten van 8 oktober vanaf 15:03 verwierp ze daardoor soms goede wielwaarden en reed de robot 7 tot 30 cm te ver.
-- Voor- en achterwiel aan dezelfde kant hebben in rechte, schone stukken dezelfde snelheid (verhouding 1,000; verschil < 0,04 m/s bij p90). Wat in een rit toch verschilt, ontstaat bij optrekken: slip.
-- De IMU alleen kan een slippende periode maar kort overbruggen: fout (p90) 1,5 cm na 0,2 s, 7 cm na 0,6 s, 17 cm na 1 s, 70 cm na 2 s. Dubbel integreren als afstandsmeting werkt dus niet (mediane fout 17 % per segment).
-- Wielen die de grond niet raken trillen ≈ 12× minder (0,035 g) dan wielen die echt rijden (0,43 g bij > 0,6 m/s).
-- Rit `134323`: na een botsing op ≈ 5,5 m kantelde de robot op zijn neus (accelerometer −0,94 g op X). De encoders telden daarna nog 7 m terugrijden terwijl de robot stilstond. Slipbewust blijft daarvan −0,17 m over.
-
-Werking per encoderpakket:
-
-1. Per kant: voor en achter gelijk → gemiddelde; anders het wiel dat het best past bij de snelheid die de IMU voorspelt (het andere slipt).
-2. Links − rechts moet kloppen met de gyro; zo niet, dan telt de kant die het best bij de IMU past.
-3. Een Kalman-filter (snelheid + versnellingsbias) voorspelt met de accelerometer, met de zwaartekracht eraf via de pitch uit de gyro. Wijken de wielen te ver af, dan telt de IMU, begrensd tussen 0 en het snelste wiel. Na 0,6 s heet dat "afstand onzeker" en stopt het rijscript na 1 s.
-4. Stilstand (geen pulsen, geen trilling) zet de snelheid op nul en stelt pitch en gyrobias bij.
-
-Het dashboard toont de slipbewuste afstand met een onzekerheid, het gemiddelde van de vier wielen ter vergelijking, en de gebeurtenissen slip, IMU overbrugt, afstand onzeker en wielen draaien door.
-
-**Grens:** slippen alle vier de wielen evenveel aan constante snelheid (gras, zand), dan ziet niemand het: de wielen zijn het eens en de accelerometer meet geen versnelling. In de simulator gaf 15 % slip over 1,5 m 26 cm te veel. Daarvoor dient de proef met vrijlopende meetwielen:
-
-```powershell
-python -m jaguar.kalibratie.test_sondewiel adres                 # robot OP BLOKKEN: rijden MM0 en MM1 apart? lopen de wielen vrij uit?
-python -m jaguar.kalibratie.test_sondewiel rijden --distance 3   # alleen de voorwielen trekken, de achterwielen meten de grond
-python -m jaguar.kalibratie.kalibreer 2.97 --vergelijk           # rolmeter: welke methode zat het dichtst?
-python -m jaguar.kalibratie.test_sondewiel draai --turns 2       # gyroschaal: draai ter plaatse, geef de echte hoek in
-```
-
-Wielen zonder vermogen hebben geen aandrijfslip en rollen mee met de grond, als de driver ze bij vermogen 0 niet afremt. `adres` controleert dat eerst. De Dr Robot-software stuurt alleen `MMW` (beide drivers); dat `MM0 !M` en `MM1 !M` apart werken, is nog niet op de robot getest. De draaiproef is nodig omdat de gyroschaal uit de datasheet komt: bij het kantelen in rit `134323` telde de gyro 81° tegen 85° volgens de accelerometer.
-
-## Live meekijken tijdens het rijden
-
-- **Browser (standaard aan):** elk rijscript opent `http://127.0.0.1:8765/` met live tegels en grafieken (`jaguar/live/view.py`, `jaguar/live/pagina.html`). Uitschakelen met `--no-live`.
-  Na de rit blijft het script de pagina openhouden tot je in de terminal op Enter drukt. De knop **Analyse** draait dan `jaguar/analyse/rit.py` op de CSV van deze rit en toont het dashboard in een venster boven de live pagina. **Dashboard openen** toont het opnieuw.
-  De knop **Opties** opent een venster op dezelfde pagina: grafieken verbergen, en of de analyse vanzelf start. `http://127.0.0.1:8765/options` opent de pagina met dat venster al open. De keuzes staan in `jaguar/live/opties.json` en gelden ook voor de volgende ritten.
-- **Rijden vanuit de browser:** `python -m jaguar.rijden.bediening` (met `--ip 127.0.0.1` voor `jaguar/testen/nep_robot.py`) houdt de live pagina open en toont de knop **Rijden**. Daar stel je een parcours samen zoals bij `jaguar/rijden/parcours.py` (+ Vooruit, + Achteruit, + Links, + Rechts, zoveel stappen als je wilt) en kies je het vermogen (50–600). **Start rit** rijdt het parcours met een eigen CSV, dus **Analyse** werkt daarna zoals altijd. Tijdens de rit zet de rode knop **STOP** of de spatiebalk de motoren op 0 en de E-Stop weer aan. Starten kan alleen op de laptop zelf; andere apparaten op de wifi kunnen meekijken en STOP drukken. De fysieke noodstop blijft de echte noodstop. `python -m jaguar.live.view` doet hetzelfde. Enter in de terminal sluit af en stopt eerst een lopende rit.
-- **Grafana (`--mqtt`):** dezelfde live waarden gaan via MQTT naar InfluxDB, en het dashboard **Jaguar live** op http://localhost:3000 toont ze. De indeling volgt dit analysedashboard: kerncijfers, Ritverkenner, Pad in 3D (hoogte en gebeurtenissen), Tracking, Niveau en Trillingen. Opzetten: zie [grafana/README.md](grafana/README.md).
-- **Zonder robot testen:** `python -m jaguar.testen.nep_robot` speelt `testdata/demo_rit.csv` af. Rijd ertegen met `--ip 127.0.0.1 --duration 5 --no-csv`. Rijden op afstand werkt niet met de nep-robot, omdat die een vaste opname afspeelt.
-
-```powershell
-cd grafana; docker compose up -d; cd ..
-python -m jaguar.rijden.rechtdoor --power 150 --distance 1 --mqtt --no-live
-```
-
-**Meekijken via het netwerk.** Iedereen op dezelfde wifi (DriJaguar) kan meekijken; alleen de laptop die rijdt heeft de code nodig:
-
-| Wat | Adres op een ander apparaat | Op de rijdende laptop |
+| `PAD_K_NAAST` / `PAD_MAX_BIJ` / `PAD_RICHTING_S` | Gemiddeld naast de lijn | Hoogstens |
 |---|---|---|
-| live pagina | `http://<IP-rijdende-laptop>:8765/` | standaard aan; het script toont de adressen bij het starten (`--no-network` = alleen lokaal) |
-| Grafana | `http://<IP-Grafana-laptop>:3000/` | `--mqtt`, en `--mqtt-host <IP>` als Docker/Grafana op een andere laptop draait |
+| 40 / 15 / 0,3 (vroeger) | 9,9 cm | 25,0 cm |
+| 70 / 25 / 0,2 | 5,0 cm | 14,7 cm |
+| **100 / 25 / 0,15 (nu)** | **3,9 cm** | **11,6 cm** |
+| 100 / 25 / 0,1 | 3,5 cm | 11,8 cm |
 
-Voorbeeld: Grafana draait op jouw laptop (192.168.0.104), je vriend rijdt met zijn laptop:
-`python -m jaguar.rijden.rechtdoor --distance 1 --mqtt --mqtt-host 192.168.0.104`. Iedereen opent dan http://192.168.0.104:3000/.
-Windows vraagt de eerste keer om Python/Docker door de firewall te laten: kies **Privénetwerk** en sta toe.
+Met 0,3 s vooruitkijken sneed het robot elke bocht 5 cm aan de binnenkant af en kwam het op de korte rechte stukken niet meer terug op de lijn. 0,1 s is nog iets beter met snelle motoren, maar gaat slingeren met tragere motoren. Slingert het robot na een bocht: terug naar 70 en 0,2.
 
-De live waarden zijn een benadering. Dit dashboard (`jaguar/analyse/rit.py` op de CSV) blijft de definitieve meting. De CSV verandert niet door de live weergave.
+---
 
-## Dashboard
-
-Open `dashboard/dashboard.html` in de projectmap en kies een rit met **Kies een rit**. Elke uitvoering van `python -m jaguar.analyse.rit` werkt ditzelfde dashboard bij met alle `rit_*_analyse.json`-bestanden; de zojuist geanalyseerde rit is standaard geselecteerd. Ververs de browser na een nieuwe analyse. Het dashboard opent rechtstreeks in de browser, zonder server; voor de 3D-beelden is internet nodig (Three.js). Alle teksten zijn Nederlands en ook bedoeld voor wie niet aan het project werkte.
-
-Opbouw, van eenvoudig naar technisch:
-
-- **In het kort**: één alinea en vijf vragen met antwoord (hoe ver, terug op de start, rechtdoor, slip, iets bijzonders).
-- **Bekijk de rit**: afspelen (½× tot 4×) met een tijdlijn van de fases en gebeurtenissen. Het bovenaanzicht toont start, doel, het gereden pad en de robot; de zijwaartse afwijking is standaard vergroot (knop voor echte schaal). Wielen kleuren geel bij slip en rood als ze doordraaien. De 3D-weergave toont hetzelfde robotmodel dat over zijn pad rijdt; de camera volgt de robot.
-- **Wat gebeurde er onderweg?**: gebeurtenissen in gewone taal; klik om ernaartoe te springen. Nieuw is **tegengehouden**: vermogen aan, de robot minstens 25 % trager dan normaal en minstens 3× de normale motorstroom (≥ 1,5 A), minstens 0,3 s. Dat is geen slip: de wielen houden grip en de afstand klopt.
-- **Hoe weet de robot hoe ver hij reed?**: drie animaties (wielen tellen, slip, hoe slip ontdekt wordt) en wat de robot nog niet ziet.
-- **Technische details**: ingeklapt; bevat de vroegere kerncijfers, robotstand van dichtbij, motoropdracht, hoogteprofiel, rechtlijnigheid, helling, trillingen, snelheid, alle gebeurtenissen en de meetwaardentabel.
-
-Totale afstand telt alle bewegingen op, ook de kleine kruipstoten heen en weer bij het stoppen. Getekende verplaatsing trekt terugrijden af. De baan combineert de afgelegde weg met de gyrokoers; geen GPS-positie.
-
-CSV bevat tijd, fase, motoropdracht en ruwe sensorregel. Zonder CSV kan achteraf geen nieuw dashboard worden berekend. Analyse vereist IMU, rustfase en encoders van beide motordrivers.
-
-## Een parcours tekenen
-
-`python -m jaguar.rijden.bediening` opent de live pagina; de knop **Rijden** opent een ontwerper: kies Binnen (raster in meters) of Buiten (kaart), teken de route met punten en bogen, kijk naar de simulatie en start. Zie [jaguar/live/](jaguar/live/README.md).
-
-## GPS-route
+## 7. Naar GPS-coördinaten
 
 ```powershell
-python -m jaguar.rijden.gps_route 50.8400000,4.3200000 50.8400449,4.3200000 50.8400449,4.3200710 --richting 0 --droog
-python -m jaguar.rijden.gps_route <lat,lon> <lat,lon> ... --kalibreer-noord 8
+python -m jaguar.rijden.gps_route 50.8400000,4.3200000 50.8400449,4.3200000 --richting 0
+python -m jaguar.rijden.gps_route --punten-bestand route.txt --richting 0 --vloeiend
+python -m jaguar.rijden.gps_route --vanaf-hier 50.84010,4.32000
+python -m jaguar.rijden.gps_route <punten> --richting 0 --droog          # alleen het plan
 ```
 
-Het eerste punt is het startpunt (nulpunt), tenzij je `--vanaf-hier` geeft: dan is de start waar het robot nu staat volgens zijn GPS en zijn alle punten doelen. Het robot rijdt elk recht stuk in één beweging met wielen en gyro. De GPS helpt alleen waar hij beter is dan de wielen (`--gps auto`, standaard; `aan` en `uit` dwingen het af).
+**Wat de GPS kan:** fout kleiner dan 15 m in 95 % van de gevallen, met WAAS/EGNOS kleiner dan 3 m, alleen onder open hemel. Hij geeft alleen `GPRMC` door, zonder satellieten of HDOP. Binnen meldt hij toch een fix terwijl de positie 20 tot 50 m dwaalt. De precisie komt dus van de wielen en de gyro; de GPS levert coördinaten in de wereld en het noorden.
 
-- Zonder `--richting` rijdt het robot eerst 6 m rechtdoor (sneller) om het noorden te vinden.
-- Het rapport na de rit zegt waar het robot staat volgens de wielen en volgens de GPS, en hoe ver dat van het laatste punt is.
-- De GPS van het robot is volgens de fabrikant tot 15 m fout (95 %), met WAAS/EGNOS tot 3 m. Geen programma komt dichter bij een coördinaat dan die fout als alleen de GPS zegt waar het robot begint. Voor nauwkeurigheid: zet het robot op een bekend punt en geef de richting op met `--richting`.
+**Van coördinaten naar rijden** ([navigatie/gps.py](../jaguar/navigatie/gps.py)):
 
-Details en de werking: [jaguar/navigatie/](jaguar/navigatie/README.md) en [jaguar/rijden/](jaguar/rijden/README.md).
+1. **Lezen:** `parse_rmc` controleert de controlesom en geeft breedte, lengte, snelheid, koers en fix.
+2. **Naar meters:** `Lokaal` legt een vlak (oost, noord) in meter rond het eerste punt, met de WGS84-formules voor meter per graad. Op een paar honderd meter is de fout kleiner dan 1 cm.
+3. **Waar het robot begint:** standaard staat het robot op het eerste punt (het nauwkeurigst). Met `--vanaf-hier` is de start het gemiddelde van de GPS in rust (`--gps-wacht`, standaard 10 s, minstens 10 posities). Springt de GPS dan meer dan 8 m, dan weigert het script.
+4. **Het noorden:** `--richting` (kompaskoers, 0 = noord, 90 = oost). Zonder `--richting` rijdt het robot eerst 6 m rechtdoor op vermogen 400 (ongeveer 1,1 m/s; daaronder is de koers over de grond onbruikbaar) en haalt het noorden uit (a) de koers over de grond en (b) de vorm van het gereden spoor. De nauwkeurigste telt, als die beter is dan 5°.
+5. **Naar het robotstelsel:** `enu_naar_robot` draait (oost, noord) met het noorden naar (vooruit, links).
+6. **Rijden:** punt per punt (draaien en rechtdoor, §4 en §5), of met `--vloeiend` als één afgerond pad (twee keer Chaikin, punt om de 2 cm) dat `volg` rijdt (§6).
 
-## Zonder robot oefenen
+**De GPS onderweg** (`--gps auto`, standaard):
 
-- `python -m jaguar.testen.sim_robot`: gesimuleerde robot die ook GPS stuurt (met opties als `--gps-ruis`, `--slip` en `--geen-gps`).
-- `python -m jaguar.testen.test_rijden` (ongeveer 4 minuten) en `python -m jaguar.testen.test_gps_route` (ongeveer 6 minuten): de controles voor het rijden en de GPS-routes.
-- De websimulator van robotics.dinno.be kan ook: zie [jaguar/testen/](jaguar/testen/README.md).
+- **Uitlijning:** het gereden spoor wordt op het GPS-spoor gelegd (kleinste kwadraten: draaiing, verschuiving, schaal). De draaiing verbetert het noorden, de schaal verraadt slip (echte meters per getelde meter). Een vaste fout van de GPS doet er niet toe: alleen de vorm telt.
+- **Vertraging:** de GPS loopt tot 1 s achter. Het script past het spoor voor 0; 0,2; … 1 s vertraging en neemt de beste.
+- **De GPS-positie zelf** telt pas als haar fout kleiner is dan die van de wielen (2 % van de gereden afstand + de onzekerheid op het noorden). Met de GPS van het robot pas na tientallen meters.
+- **Past het spoor niet** (binnen, tussen gebouwen): de GPS telt niet.
+- `--gps uit`: alleen wielen en gyro. `--gps aan`: de GPS-positie altijd zodra het spoor past.
+- Met `--vloeiend` ligt het pad vast bij het vertrek; de GPS kijkt alleen mee.
+
+**Na de rit** drukt het script af:
+
+- de positie **volgens wielen en gyro**: de odometrie met het noorden terug omgerekend naar breedte/lengte (`robot_naar_enu` + `Lokaal.naar_ll`), en de afstand tot het laatste punt;
+- de positie **volgens de GPS**: het gemiddelde van de laatste 2 s;
+- hoe goed het GPS-spoor op het gereden spoor past (rms), het noorden volgens het spoor, de schaal, en per punt wat er gebruikt is.
+
+**GPS meten in de ontwerper:** zet het robot op de plek, klik **GPS meten**. Een minuut lang (E-Stop blijft aan) kijkt de pagina hoe de positie beweegt: **goed** (spreiding ≤ 3 m, wegloop ≤ 2 m), **matig** (≤ 8 m en ≤ 5 m) of **slecht**. Een rustige positie is nog geen juiste positie: weerkaatsing tegen een gebouw geeft een vaste fout van enkele meters.
+
+---
+
+## 8. De camera en obstakels
+
+[camera/obstakel.py](../jaguar/camera/obstakel.py). Standaard uit; aanzetten op de live pagina met **Opties → Camera** (beeld) en **Opties → Obstakels** (stoppen). Nodig: `pip install opencv-python numpy`.
+
+### Het beeld
+
+- Axis-camera op `192.168.0.65:8081`, Digest-login, MJPEG op `/axis-cgi/mjpg/video.cgi`.
+- De live pagina krijgt 640×480 via `jaguar/live/view.py` (`/camera`), dat de login doet, zodat de browser geen wachtwoord nodig heeft.
+- De detectie vraagt een eigen stroom van **320×240 aan 10 beelden per seconde**: klein, zodat de wifi de robotgegevens niet ophoudt. Een achtergronddraad knipt de JPEG's uit de stroom (`FF D8` … `FF D9`) en verwerkt elk beeld.
+
+### Een muur herkennen
+
+Het idee: de camera staat vast op het robot en kijkt schuin naar de vloer. Waar de vloer ophoudt, begint het dichtste obstakel: de voet van een muur, een deur, een stoelpoot, een been.
+
+Per beeld (`edge_columns`):
+
+1. **Gladmaken en omzetten:** Gauss-filter 7×7 tegen ruis, dan naar de kleurruimte **Lab** (lichtheid + twee kleurassen; een kleurverschil daarin komt overeen met wat een mens ziet).
+2. **Elke rij met de vloer eronder vergelijken:** per kolom het gemiddelde van de rijen 3 tot 10 pixels lager (snel, met een cumulatieve som). De vloer mag met de afstand geleidelijk lichter of donkerder worden (reflectie); een plotse sprong niet.
+3. **Sprong = rand:** is het Lab-verschil groter dan **15**, dan is dat de rand van de vloer. Ter vergelijking: de vloer zelf verandert hoogstens 7 per 5 rijen, de voet van een muur geeft ongeveer 30.
+4. **Van onder naar boven:** per kolom telt de **eerste** sprong vanaf de onderkant (de onderste 3 % van het beeld wordt overgeslagen: daar kan het robot zelf in beeld komen). Dat is het dichtste obstakel in die kolom.
+5. **De weg van het robot:** alleen de middelste strook telt, van 38 % tot 62 % van de breedte (ongeveer 0,6 tot 0,8 m breed op 1 à 2 m). Van die kolommen telt het 85e percentiel: de dichtste rand, op een paar ruisende kolommen na.
+6. **Ernaast:** links (0–38 %) en rechts (62–100 %) gebeurt hetzelfde met de mediaan, om te weten aan welke kant de vloer vrij is. De pagina krijgt de vloerrand in 32 vakken over de hele breedte.
+
+### Van beeldrij naar afstand
+
+Een vaste camera boven een vlakke vloer: hoe lager in het beeld, hoe dichterbij. Dat volgt
+
+```text
+d = k / (y − y_horizon)        y = rij (0 = boven, 1 = onder)
+```
+
+- **Kalibreren** (Opties → Obstakels → Kalibreren…): zet het robot voor een muur op een gekende afstand en klik de voet van de muur aan. Minstens twee afstanden. De punten staan in `config/camera_kalibratie.json` (nu: 1; 1,4; 1,62; 2; 2,4 en 3,4 m).
+- **De fit:** rechte door (1/d, y) met kleinste kwadraten → `k` en `y_horizon`. Onzin (k ≤ 0, horizon buiten het beeld) wordt geweigerd. Nu: k = 0,154, y_horizon = 0,546.
+- **Bereik:** verder dan 6 m ligt de rij te dicht bij de horizon om iets te betekenen.
+- **Dode zone:** dichter dan `k / (0,95 − y_horizon)` ziet de camera de vloer niet meer (nu 0,38 m). De stopafstand is daarom nooit kleiner dan die dode zone + 5 cm.
+
+### Wat het robot ermee doet
+
+- **Stopafstand:** standaard 0,4 m (Opties). Ter plaatse draaien beschrijven de hoeken een cirkel van 42 cm rond het midden, 11 cm voorbij de voorkant; de rest is marge voor de camerafout dichtbij en de vertraging. Met de huidige kalibratie wordt het 0,43 m (dode zone 0,38 + 0,05).
+- **Vrije weg** = gemeten afstand − stopafstand − snelheid × (leeftijd van het beeld + 0,4 s). Die 0,4 s is de vertraging van camera en wifi: zo ver rijdt het robot al voor het beeld binnen is.
+- **Afremmen:** rechtdoor rijden remt naar die vrije weg zoals naar een doel (√(2 · rem · vrije weg)). Is de vrije weg 0: `Obstakel`, motoren uit.
+- **Blind = stoppen:** geen vers beeld in 1,5 s → `CameraWeg`. Het robot rijdt nooit blind vooruit.
+- **Alleen vooruit:** achteruit en draaien kijkt de camera niet.
+
+**In een parcours** ([rijden/parcours.py](../jaguar/rijden/parcours.py)):
+
+1. tot 4 s wachten: loopt iemand weg (weg vrij tot stopafstand + 1 m), dan gewoon verder;
+2. is er naast het obstakel vrije vloer: een **omweg** naar de vrijste kant. 0,5 m achteruit, 45° opzij, schuin tot 0,9 m opzij, 1,2 m rechtdoor naast het obstakel (de diepte ziet de camera niet), schuin terug op de lijn, en weer op koers. Hoogstens 2 omwegen per stap;
+3. muur dwars over de weg, of geen omweg mogelijk: de stap eindigt voor het obstakel en het parcours gaat verder met de volgende stap.
+
+**Handmatig rijden:** vooruit is geblokkeerd zolang er iets binnen de stopafstand staat; draaien en achteruit niet.
+
+**Grenzen:** glas, een muur in de kleur van de vloer, een vloer met een sterk patroon of een rand (tapijt), en donker. De noodstop blijft nodig.
+
+**Een eigen model aansluiten** (bv. een neuraal netwerk): `robot.py` gebruikt alleen een object met `latest()` (afstand in m of None, leeftijd van het beeld in s), `stop` (stopafstand) en `error`; `parcours.py` daarnaast `dist` en `free_side(m)`. De oude versie van de camera staat op branch `camera-origineel`.
+
+---
+
+## 9. Veiligheid en batterij
+
+Alle rijlussen gaan door `_motor()` en `_guard()` in `robot.py`. Daar werken STOP, Pauze, Terug naar start, de batterij en deze stops, in elke fase:
+
+| Stop | Wanneer |
+|---|---|
+| Gekanteld | meer dan 35° t.o.v. de start |
+| Vastgelopen | 1,5 s bij (bijna) vol vermogen nauwelijks vooruit |
+| Wielen in de lucht / afstand onzeker | langer dan 1 s |
+| Naast het pad | meer dan 1 m (pad volgen) |
+| Obstakel | binnen de stopafstand vooruit (camera aan) |
+| Camera weg | 1,5 s geen beeld (camera aan) |
+| Watchdog | geen PING: de controller zet de motoren uit |
+
+Na elke rit, ook na een fout: motoren 0 en de E-Stop weer aan.
+
+**Batterij:** de spanning springt ±0,5 V tussen twee metingen, dus het script kijkt naar de mediaan over 10 s.
+
+- Beginnen kan vanaf 22,2 V.
+- Onder 21,6 V (3,6 V per cel) breekt het parcours af en rijdt het robot terug naar de start.
+- Onder 21,0 V (3,5 V per cel) stopt het helemaal, ook op de terugweg.
+
+---
+
+## 10. Bediening vanuit de browser
+
+`python -m jaguar.rijden.bediening` (met `--ip 127.0.0.1` tegen een simulator) houdt de live pagina open op http://127.0.0.1:8765.
+
+- **Rijden: de ontwerper** ([live/](../jaguar/live/README.md)). Kies **Binnen** (raster in meter) of **Buiten** (OpenStreetMap/Esri-kaart met coördinaten en de richting bij de start).
+  - Tekenen met de muis: de lijn wordt gladgestreken en vereenvoudigd (Ramer-Douglas-Peucker). Een zachte hoek (minder dan 50°) wordt een boog met de grootste straal die past; een scherpe hoek een draai ter plaatse. Kiezen kan met **Auto / Alles rond / Scherp**.
+  - Of punten zetten en verslepen, een punt invoegen met de **+** in het midden van een stuk, of **Voorbeelden** (lijn, heen en terug, vierkant, rechthoek, ovaal, cirkel, slalom).
+  - De simulatie rijdt het robot op ware grootte over de route, met de benodigde ruimte en de geschatte tijd. Starten pas na een bevestiging ("robot staat goed, ruimte vrij").
+- **Pauze** (knop of P): stopt waar het is; **Hervatten** rijdt dezelfde stap verder. Pauzeren mag ook vanaf een ander apparaat, hervatten alleen op de laptop.
+- **Terug naar start:** breekt het parcours af, draait naar de start, rijdt er in een rechte lijn heen (achteruit als de start achter het robot ligt en dichter dan 3 m), en draait naar de beginrichting. Kan ook na de rit, met de laatste positie volgens de odometrie. Kijkt niet of de lijn vrij is (alleen de camera vooruit).
+- **Handmatig:** pijltjes/WASD, de knoppen op het scherm of een gamepad (linkerstick, B = STOP), met een schuif voor het vermogen. De pagina stuurt 10× per seconde de stand; komt er 0,4 s niets, dan stopt het robot. Rechtdoor houdt de gyro de koers vast. Alleen op de laptop.
+- **STOP** (knop of spatie): motoren 0 en E-Stop aan. Werkt vanaf elk apparaat op het wifi.
+- De fysieke noodstop blijft de echte noodstop.
+
+---
+
+## 11. Live meekijken en Grafana
+
+- **Live pagina:** elk rijscript start [live/view.py](../jaguar/live/view.py) op poort 8765 (`--no-live` = uit): tegels, grafieken, camera, knoppen. Andere apparaten op het wifi openen `http://<IP-laptop>:8765/` (`--no-network` = alleen lokaal).
+- **Opties:** grafieken tonen of verbergen, vanzelf analyseren na de rit, camera, obstakels en stopafstand. Bewaard in `jaguar/live/opties.json`.
+- **Grafana:** met `--mqtt` gaan dezelfde waarden naar Mosquitto (poort 1884) → Telegraf → InfluxDB (8086) → Grafana op http://localhost:3000, dashboard "Jaguar live". Topics `jaguar/imu` (50 Hz) en `jaguar/status` (2 Hz). Starten: `cd grafana; docker compose up -d`. Draait Grafana op een andere laptop: `--mqtt-host <IP>`.
+- De live waarden zijn een benadering; de analyse van de CSV is de definitieve meting.
+
+---
+
+## 12. Opslaan, analyse en dashboard
+
+**De CSV:** elke rit wordt `ritten/rit_<datum>_<tijd>_<soort>.csv` met vier kolommen: tijd, fase, vermogen en de ruwe regel. Daartussen staan de eigen regels van het script: `PLAN`, `PAD`, `PADPUNTEN` (het gevraagde pad, een punt om de 10 cm), `DOEL`, `DRAAI`, `OBSTAKEL`, `OMWEG`, `MELDING` … Zonder CSV kan achteraf niets meer berekend worden (`--no-csv` = niet opslaan).
+
+**De analyse** (`python -m jaguar.analyse.rit` of de knop **Analyse**):
+
+1. de CSV inlezen: IMU, encoders, motoropdrachten en de eigen regels;
+2. de gyrobias en de zwaartekracht uit de laatste 3 s rust;
+3. alle regels opnieuw door dezelfde odometrie (§2): afstand, slip, gebeurtenissen;
+4. het gereden spoor uit afstand × gyrokoers;
+5. helling en hoogte: pitch uit de accelerometer in stilstand, uit de gyro tijdens het rijden; de kanteling door het motorkoppel wordt eraf gerekend;
+6. trillingen, snelheid, rechtlijnigheid en "tegengehouden" (vermogen aan, minstens 25 % trager, minstens 3× de normale motorstroom);
+7. bij een pad: elk punt van het spoor tegen de gevraagde lijn → gemiddeld en hoogstens ernaast, en hoe ver het van het einde stopte (figuur "Route in één beweging");
+8. schrijft `ritten/<rit>_analyse.json` en bouwt `dashboard/dashboard.html` opnieuw met alle ritten.
+
+**Het dashboard** (`dashboard/dashboard.html`, opent zonder server; voor 3D is internet nodig):
+
+- **In het kort:** één alinea en vijf vragen (hoe ver, terug op de start, rechtdoor, slip, iets bijzonders);
+- **Bekijk de rit:** afspelen (½× tot 4×) met een tijdlijn, bovenaanzicht en 3D; wielen kleuren geel bij slip en rood als ze doordraaien;
+- **Wat gebeurde er onderweg?:** gebeurtenissen in gewone taal, klik om ernaartoe te springen;
+- **Hoe weet de robot hoe ver hij reed?:** drie animaties;
+- **Technische details:** alle cijfers en grafieken.
+
+Het spoor in het dashboard is waar het robot **denkt** te zijn. Hoe ver dat van de werkelijkheid ligt, meet je met een rolmeter, of in de simulator (§14).
+
+---
+
+## 13. Kalibreren
+
+| Wat | Hoe |
+|---|---|
+| Wielstraal | `python -m jaguar.rijden.rechtdoor --distance 3`, met de rolmeter meten, dan `python -m jaguar.kalibratie.kalibreer 2.968`. Schrijft `config/kalibratie.json` (nu 0,1336 m; zonder bestand 0,135 m). Op een harde, vlakke vloer. `--vergelijk` toont per methode de fout zonder op te slaan |
+| Afstand met de GPS | `python -m jaguar.kalibratie.gps_afstand --distance 20 [--bewaar]`: bewaart alleen als de meting goed genoeg is (met de GPS van het robot vaak niet) |
+| Meetwielen | `test_sondewiel adres` (robot op blokken), dan `test_sondewiel rijden --distance 3`: alleen de voorwielen trekken, de achterwielen meten de grond zonder aandrijfslip |
+| Gyroschaal | `python -m jaguar.kalibratie.test_sondewiel draai --turns 2`, en de echte hoek ingeven |
+| Driver | `python -m jaguar.kalibratie.test_driver` leest de driverinstellingen (alleen lezen) |
+| Camera | Opties → Obstakels → Kalibreren… (§8) |
+
+---
+
+## 14. Zonder robot: simulatoren en tests
+
+| Wat | Hoe |
+|---|---|
+| Nep-robot | `python -m jaguar.testen.nep_robot` speelt `testdata/demo_rit.csv` af (reageert niet op de motoren) |
+| Gesimuleerde robot | `python -m jaguar.testen.sim_robot`: vertraging, wrijving, slip bij draaien, watchdog 0,3 s, E-Stop, GPS 5 Hz. Opties `--gps-ruis`, `--gps-dwaal`, `--gps-vertraging`, `--slip`, `--vertraging`, `--terrein`, `--spoor` |
+| Websimulator | robotics.dinno.be via de lokale Training API en `api_brug.py` (hieronder) |
+| Tests | `test_rijden` (~4 min), `test_gps_route` (~6 min), `test_bediening` (~2 min), `test_navigatie`; `sim_boog` voor de bogen |
+
+Rijden tegen een simulator: zelfde commando's, met `--ip 127.0.0.1`.
+
+### Demo met stenen en plassen
+
+- `python -m jaguar.rijden.bediening --demo` start de gesimuleerde robot in hetzelfde programma (op een vrije poort) met het terrein uit `testdata/terrein_demo.json` (`--terrein geen` = vlakke grond). De pagina toont "DEMO SIMULATIE", en `http://127.0.0.1:8765/kaart` toont live het terrein, de gevraagde route en waar het robot **echt** rijdt. Het robot kijkt bij de start naar het noorden (boven op het raster).
+- `python -m jaguar.testen.terrein_rapport --demo` rijdt het demo-parcours, analyseert het en tekent `ritten/terrein_rapport.png` (ongeveer twee minuten). Zonder `--demo` maakt het het rapport van de nieuwste rit.
+- Op de tekening: stenen (grijs), plassen (blauw), het echte spoor (rood), het spoor volgens de odometrie (gekleurd naar de trilling) en wat de analyse onderweg zag.
+- Wat je eraan ziet: stenen voelt het robot (trilling, schokken) en het rijdt er gewoon overheen. In een plas slippen alle wielen samen: de wielen tellen meer meters dan het robot aflegt, en daarna rijdt het naast zijn route zonder het te weten (§2, grens). Het robot herkent een plas niet vooraf en ontwijkt niets: het volgt de getekende lijn.
+
+### De websimulator via de lokale API
+
+```text
+rijscript ──TCP 127.0.0.1:10001──> testen/api_brug.py ──HTTP localhost:8780──> robotSimulatorAPI (server.mjs) ──> simulator in Chrome
+```
+
+- **De API:** [github.com/mdequanter/robotSimulatorAPI](https://github.com/mdequanter/robotSimulatorAPI), ongewijzigd (commit `585e8f6`). `node server.mjs --show` draait de simulator van de site in Chrome, met de sleutel van je account in `ROBOTSIM_KEY`.
+- **De brug** ([testen/api_brug.py](../jaguar/testen/api_brug.py)) doet zich voor als het echte robot:
+  - vraagt 50 stappen van 0,02 s per seconde (`POST /api/envs/{id}/step`), in echte tijd;
+  - geeft onze regels (`PING`, `MMW !M ..`) mee als actie `{"tcp": [...]}`;
+  - bouwt uit elke waarneming de regels van het echte robot: IMU (50 Hz), `MM0/MM1 C=` en `V=`, `$GPRMC` uit het veld `gps` (5 Hz), `FF=` (1 Hz);
+  - keert het teken van de gyro-Y-as om (in de simulator andersom dan op het robot; zonder dat telde de odometrie op een heuvel de helling dubbel en verwierp ze de wielen);
+  - zet het robot neer met `--plaats x,z,koers` (actie `place`; in de simulator 0° = oost, 90° = noord);
+  - bewaart met `--spoor` 5× per seconde de **echte** positie (veld `pose`) en met `--beeld` een JPEG van het einde.
+- **Starten:** `.\start_websim.ps1 -Plaats "-3.4,0,90"` doet beide. Daarna `$env:JAGUAR_WIELSTRAAL = "0.135"` (de wielstraal van de simulator) en rijden met `--ip 127.0.0.1`.
+- **De GPS in de simulator** heeft een fout van ongeveer 1 m die langzaam dwaalt, en een resolutie van 18 cm.
+
+**Drie posities in de simulator:**
+
+| Bron | Ziet onze code het? | Waarvoor |
+|---|---|---|
+| GPS van de simulator (`$GPRMC`) | ja | noorden en schaal |
+| Encoders en IMU van de simulator | ja | sturen |
+| Echte positie (`pose`) | nee | achteraf meten (`ritten/websim_spoor.csv`) |
+
+**De ε-baan** (bord 12 in het park): 87 GPS-punten om de 0,5 m langs de middellijn van het aarden pad, 42 m, in `testdata/websim_epsilon_baan.txt`. Gereden met `gps_route --vloeiend --richting 0`: gemiddeld 4,9 cm en hoogstens 12,3 cm naast de middellijn, gestopt op 8,5 cm van het doel (echte positie). `docs/websimulator/teken_baan.py` tekent het spoor tegen de baan.
+
+---
+
+## 15. Bestanden in config/
+
+| Bestand | Inhoud |
+|---|---|
+| `kalibratie.json` | gemeten wielstraal (weg = 0,135 m) |
+| `leerwaarden.json` | bijgeleerde waarden: vermogen→snelheid, uitloop, kruipstoot, draaistoot (niet in git) |
+| `camera_kalibratie.json` | de kalibratiepunten van de camera en het model (k, y_horizon, dode zone) |
+
+`JAGUAR_WIELSTRAAL` in de omgeving gaat voor `kalibratie.json` (voor de websimulator: 0.135). `JAGUAR_DRIVER=0` zet de positiemodus van de driver uit.

@@ -27,10 +27,10 @@ docker compose pull
 3. Open http://localhost:3000. Het dashboard **Jaguar live** opent meteen, zonder login.
 4. Rijd met `--mqtt`:
    ```powershell
-   python fase1_rechtdoor_imu.py --power 150 --duration 5 --mqtt
-   python fase1_heen_en_terug.py --power 150 --duration 2 --mqtt --no-live
+   python -m jaguar.rijden.rechtdoor --power 150 --duration 5 --mqtt
+   python -m jaguar.rijden.heen_en_terug --power 150 --duration 2 --mqtt --no-live
    ```
-   `--no-live` zet de browserpagina van `live_view.py` uit. Je kunt ook beide tegelijk gebruiken.
+   `--no-live` zet de browserpagina van `jaguar/live/view.py` uit. Je kunt ook beide tegelijk gebruiken.
 
 Het dashboard ververst elke seconde en toont de laatste 2 minuten. Wil je een oude rit bekijken, kies ze dan bij **Rit** en zet de tijdsperiode rond die rit.
 
@@ -42,7 +42,7 @@ Docker en Grafana hoeven maar op **één** laptop te draaien. De laptop die met 
 # laptop A: Grafana (eenmalig met internet: docker compose pull)
 cd grafana; docker compose up -d
 # laptop B: rijdt met de robot; 192.168.0.104 = IP van laptop A op de DriJaguar-wifi
-python fase1_rechtdoor_imu.py --distance 1 --mqtt --mqtt-host 192.168.0.104
+python -m jaguar.rijden.rechtdoor --distance 1 --mqtt --mqtt-host 192.168.0.104
 ```
 
 Iedereen op dezelfde wifi opent dan `http://192.168.0.104:3000/`. Laptop B heeft alleen Python en `paho-mqtt` nodig. Het IP van een laptop vind je met `ipconfig` (IPv4-adres van de wifi-adapter). De eerste keer vraagt Windows op laptop A om Docker door de firewall te laten: kies **Privénetwerk**.
@@ -51,11 +51,11 @@ De eenvoudige live pagina (`http://<IP-rijdende-laptop>:8765/`) werkt daarnaast 
 
 ## Testen zonder robot
 
-`nep_robot.py` speelt een opgenomen rit (`testdata/demo_rit.csv`) af op 127.0.0.1:10001. Gebruik twee terminals:
+`jaguar/testen/nep_robot.py` speelt een opgenomen rit (`testdata/demo_rit.csv`) af op 127.0.0.1:10001. Gebruik twee terminals:
 
 ```powershell
-python nep_robot.py
-python fase1_rechtdoor_imu.py --ip 127.0.0.1 --mqtt --no-csv --no-live
+python -m jaguar.testen.nep_robot
+python -m jaguar.rijden.rechtdoor --ip 127.0.0.1 --mqtt --no-csv --no-live
 ```
 
 Gebruik `--no-csv`, anders komt er een CSV met nepdata in `ritten/`. De nep-robot blijft draaien voor de volgende rit. Stoppen doe je met Ctrl+C.
@@ -68,7 +68,7 @@ De indeling volgt het analysedashboard (`dashboard.html`), maar dan live:
 |---|---|
 | Kerncijfers | verplaatsing, totale afstand, snelheid, hoogste snelheid, zijdelings, koersdrift (gyro en encoders), langs- en dwarshelling, hoogte, batterij (rood onder 22,2 V), E-Stop |
 | Ritverkenner | fasebalk · **camera** (op de plek van de 3D-robotstand) · baan in bovenaanzicht · motoropdracht en snelheid |
-| Pad in 3D: hoogte en gebeurtenissen | hoogteprofiel langs de afgelegde weg · gebeurtenissen: vastgelopen, schuin, vrije val, wielen vrij, één kant (zelfde drempels als `analyse_rit.py`) |
+| Pad in 3D: hoogte en gebeurtenissen | hoogteprofiel langs de afgelegde weg · gebeurtenissen: vastgelopen, schuin, vrije val, wielen vrij, één kant (zelfde drempels als `jaguar/analyse/rit.py`) |
 | Tracking | zijdelingse afwijking · koers gyro tegenover encoders |
 | Niveau | pitch, roll en de gyro-pitch die de hoogte gebruikt |
 | Trillingen en snelheid | verticale trilling (RMS per 0,2 s) · snelheid |
@@ -95,7 +95,7 @@ docker exec jaguar-mosquitto-1 mosquitto_sub -t "jaguar/#" -v
 
 - **Poort 1884, niet 1883.** Op deze pc draait al een Windows-dienst `mosquitto` op poort 1883. De Docker-broker staat daarom op 1884 (zie `PORT` in `mqtt_stream.py`).
 - **Draait de omgeving niet, dan rijdt de robot gewoon.** Het script meldt dan dat er geen broker is. Er wordt niets verstuurd, maar de CSV wordt wel opgeslagen.
-- **De CSV blijft de bron.** Grafana toont de live benadering. De definitieve cijfers komen uit `analyse_rit.py` op de CSV.
+- **De CSV blijft de bron.** Grafana toont de live benadering. De definitieve cijfers komen uit `jaguar/analyse/rit.py` op de CSV.
 - **Zelf panelen aanpassen** kan in Grafana zelf, want je bent automatisch admin. Wil je de wijziging bewaren, exporteer dan het dashboard (Share → Export) naar `dashboards/jaguar.json`.
 - **Opruimen:**
   - `docker compose down` stopt alles en houdt de data.

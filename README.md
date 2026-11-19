@@ -98,7 +98,7 @@ Andere apparaten op het wifi kunnen meekijken en STOP drukken; starten kan allee
 
 [camera/obstakel.py](jaguar/camera/obstakel.py), standaard uit (aan via Opties → Camera / Obstakels):
 
-- **Zien:** in de middelste strook van het beeld zoekt OpenCV van onder naar boven de eerste plotse kleursprong (de voet van een obstakel).
+- **Zien:** een muur herkent hij waar de vloer ophoudt: in de middelste strook van het beeld zoekt OpenCV van onder naar boven de eerste plotse kleursprong t.o.v. de vloer net eronder (de voet van de muur). Stap voor stap uitgelegd in [docs/uitgebreid.md](docs/uitgebreid.md#8-de-camera-en-obstakels).
 - **Afstand:** de camera staat vast, dus elke beeldlijn is een afstand op de vloer (`d = k / (y − y_horizon)`), eenmalig gekalibreerd tegen een muur op 1, 2 en 3 m.
 - **Reageren:** vooruit afremmen en stoppen op 0,4 m. Een parcours wacht tot 4 s en rijdt er dan omheen. Geen beeld gedurende 1,5 s = stoppen.
 - **Grens:** alleen vooruit; glas, een muur in de kleur van de vloer of duisternis ziet hij niet.
@@ -135,6 +135,8 @@ De fysieke noodstop blijft de echte noodstop.
 | Wat | Commando |
 |---|---|
 | Gesimuleerde robot (met GPS, slip, vertraging) | `python -m jaguar.testen.sim_robot`, dan rijden met `--ip 127.0.0.1` |
+| Demo in de browser, met stenen en plassen | `python -m jaguar.rijden.bediening --demo`: start de gesimuleerde robot erbij en opent een live kaart (`/kaart`) met waar het robot echt rijdt |
+| Rapport van een rit over stenen en plassen | `python -m jaguar.testen.terrein_rapport --demo` → `ritten/terrein_rapport.png` |
 | Websimulator robotics.dinno.be | `.\start_websim.ps1` (zie [testen/](jaguar/testen/README.md)) |
 | Tests | `python -m jaguar.testen.test_rijden` (~4 min), `test_gps_route` (~6 min), `test_bediening` (~2 min) |
 
